@@ -14,7 +14,7 @@
     src=src.replace(/^\s*[-*]\s+(.+)$/gm,"<li>$1</li>");
     src=src.replace(/(?:<li>[\s\S]*?<\/li>\n?)+/g,s=>"<ul>"+s+"</ul>");
     src=src.replace(/^\s*(\d+)\.\s+(.+)$/gm,"<li>$2</li>");
-    src=src.replace(/(?:<li>[\\s\\S]*?<\\/li>\\n?)+/g,s=>"<ol>"+s+"</ol>");
+    src=src.replace(/(?:<li>[\s\S]*?<\/li>\n?)+/g,s=>"<ol>"+s+"</ol>");
     src=src.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/__(.+?)__/g,"<strong>$1</strong>");
     src=src.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,"$1<em>$2</em>").replace(/(^|[^_])_([^_\n]+)_(?!_)/g,"$1<em>$2</em>");
     src=src.replace(/`([^`\n]+)`/g,"<code>$1</code>");
@@ -24,7 +24,8 @@
   }
   function notify(text){toast.textContent=text;toast.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove("show"),5000)}
   function renderMarkdown(body,text){
-    body.innerHTML=md ? md.render(text) : fallbackMarkdown(text);
+    const normalized=String(text).replace(/\\([*_`])/g,"$1");
+    body.innerHTML=md ? md.render(normalized) : fallbackMarkdown(normalized);
     body.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener noreferrer nofollow"});
   }
   function addMessage(role,text,typing=false){
