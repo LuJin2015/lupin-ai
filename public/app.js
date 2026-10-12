@@ -12,7 +12,7 @@
   function saveCurrentChat(){
     if(!history.length)return;
     let chat=currentChat();
-    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id}
+    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id}
     chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
     chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
   }
