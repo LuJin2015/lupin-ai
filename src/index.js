@@ -49,16 +49,19 @@ function linksFrom(result) {
 }
 async function getWebContext(env, prompt) {
   const lower = prompt.toLowerCase();
-  const wantsWeb = /\b(browse|visit|open|read|summari[sz]e|scrape|crawl|look at|check this (?:site|page|url)|research this page)\b/.test(lower);
-  const start = extractUrl(prompt);
-  if (!wantsWeb || !start) return "";
+  const wantsWeb = /\b(browse|search|find|look up|visit|open|read|summari[sz]e|scrape|crawl|look at|check this (?:site|page|url)|research this page)\b/.test(lower);
+  if (!wantsWeb) return "";
+  const explicitStart = extractUrl(prompt);
+  const query = prompt.replace(/https?:\/\/[^\s<>"']+/ig, " ").replace(/\b(browse|search|the|web|internet|online|please|can you|could you|for me|research|find|look up)\b/ig, " ").trim();
+  const start = explicitStart || (query ? validPublicUrl("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query)) : null);
+  if (!start) return "";
   const doCrawl = /\bcrawl\b/.test(lower);
   const doScrape = /\bscrape\b/.test(lower);
   const selectorMatch = prompt.match(/(?:selector|css)\s*[:=]?\s*[`"']?([.#][\w-]+|[a-z][\w-]*(?:\[[^\]]+\])?)/i);
   const pages = [];
   const visited = new Set();
   const queue = [start.href];
-  const maxPages = doCrawl ? 3 : 1;
+  const maxPages = doCrawl && explicitStart ? 3 : 1;
   while (queue.length && pages.length < maxPages) {
     const raw = queue.shift();
     const u = validPublicUrl(raw);
