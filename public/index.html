@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#11130f">
-<meta name="description" content="Lupin AI — a clear, capable AI assistant."><title>Lupin AI</title><link rel="stylesheet" href="./styles.css?v=1.1.4"><script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script><script src="./app.js?v=1.1.4" defer></script>
+<meta name="description" content="Lupin AI — a clear, capable AI assistant."><title>Lupin AI</title><link rel="stylesheet" href="./styles.css?v=1.1.7"><script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script><script src="./app.js?v=1.1.7" defer></script>
 </head>
 <body>
 <div class="shell">
 <aside class="sidebar" id="sidebar"><a class="brand" href="./"><span class="mark">L</span><span>LUPIN <i>AI</i></span></a>
-<button class="new-chat" id="new-chat">＋ New chat</button><div class="side-label">YOUR SPACE</div><div class="ready"><span></span> Ready when you are</div>
+<button class="new-chat" id="new-chat">＋ New chat</button><div class="side-label">YOUR SPACE</div><div class="ready"><span></span> Ready when you are</div><div class="side-label history-heading">CHAT HISTORY</div><div id="chat-list" class="chat-list" aria-label="Saved chat history"></div>
 <div class="side-bottom"><div class="model"><span class="pulse"></span><div><b>Qwen 3.8 · 27B</b><small>Cloudflare Workers AI</small></div></div><p>Made for curious minds.</p></div></aside>
 <main><header class="topbar"><button class="menu" id="menu" aria-label="Open menu">☰</button><div class="top-title">Lupin <i>AI</i></div><div class="connection"><span></span> Cloud model</div></header>
 <section class="conversation" id="conversation" aria-live="polite"><div class="welcome" id="welcome"><div class="eyebrow"><span></span> YOUR AI, YOUR CURIOSITY</div><h1>Big questions.<br><em>Clearer answers.</em></h1><p class="intro">A fresh place to think, learn, build and figure things out.</p>
@@ -17,6 +17,6 @@
 <button data-prompt="Give me a small Python coding challenge and explain what skills it practices."><span class="symbol">{ }</span><span><b>Code something</b><small>Learn by making things</small></span><strong>↗</strong></button>
 <button data-prompt="Tell me a surprising science fact and explain why it is true."><span class="symbol">◉</span><span><b>Explore a rabbit hole</b><small>Follow your curiosity</small></span><strong>↗</strong></button>
 </div></div><div class="messages" id="messages"></div></section>
-<footer class="composer-wrap"><form id="chat-form" class="composer"><textarea id="message-input" rows="1" maxlength="6000" placeholder="Message Lupin AI… (ask it to browse a URL)" aria-label="Message Lupin AI"></textarea><div class="composer-tools"><span>Enter to send · Shift + Enter for a new line</span><button id="send-button" type="submit" aria-label="Send message">↑</button></div></form><p class="disclaimer">Lupin AI can make mistakes. Check important information.</p></footer><p class="version" style="text-align:center;color:#666d60;font-size:10px;margin:8px 0 0">Lupin AI · v1.1.4</p>
+<footer class="composer-wrap"><form id="chat-form" class="composer"><textarea id="message-input" rows="1" maxlength="6000" placeholder="Message Lupin AI… (ask it to browse a URL)" aria-label="Message Lupin AI"></textarea><div class="composer-tools"><span>Enter to send · Shift + Enter for a new line</span><button id="send-button" type="submit" aria-label="Send message">↑</button></div></form><p class="disclaimer">Lupin AI can make mistakes. Check important information.</p></footer><p class="version" style="text-align:center;color:#666d60;font-size:10px;margin:8px 0 0">Lupin AI · v1.1.7</p>
 </main></div><div id="toast" class="toast" role="status"></div>
 </body></html>
