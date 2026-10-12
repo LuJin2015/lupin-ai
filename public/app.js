@@ -4,10 +4,25 @@
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const history=[]; let busy=false, toastTimer;
   const md=window.markdownit ? window.markdownit({html:false,linkify:true,breaks:true,typographer:true}) : null;
+  function fallbackMarkdown(text){
+    const escape=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    let src=escape(String(text)).replace(/\r\n?/g,"\n");
+    const blocks=[];
+    src=src.replace(/```([\w-]*)\n([\s\S]*?)```/g,(_,lang,code)=>{blocks.push("<pre><code>"+code.replace(/\n$/,"")+"</code></pre>");return "\n@@BLOCK"+(blocks.length-1)+"@@\n"});
+    src=src.replace(/^\s*(#{1,6})\s+(.+)$/gm,(_,marks,title)=>"<h"+marks.length+">"+title+"</h"+marks.length+">");
+    src=src.replace(/^\s*[-*]\s+(.+)$/gm,"<li>$1</li>");
+    src=src.replace(/(?:<li>[\s\S]*?<\/li>\n?)+/g,s=>"<ul>"+s+"</ul>");
+    src=src.replace(/^\s*(\d+)\.\s+(.+)$/gm,"<li>$2</li>");
+    src=src.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/__(.+?)__/g,"<strong>$1</strong>");
+    src=src.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,"$1<em>$2</em>").replace(/(^|[^_])_([^_\n]+)_(?!_)/g,"$1<em>$2</em>");
+    src=src.replace(/`([^`\n]+)`/g,"<code>$1</code>");
+    src=src.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2">$1</a>');
+    src=src.split(/\n{2,}/).map(part=>/^<(h[1-6]|ul|pre|blockquote)/.test(part.trim())?part:"<p>"+part.replace(/\n/g,"<br>")+"</p>").join("\n");
+    return src.replace(/@@BLOCK(\d+)@@/g,(_,n)=>blocks[Number(n)]||"");
+  }
   function notify(text){toast.textContent=text;toast.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove("show"),5000)}
   function renderMarkdown(body,text){
-    if(!md){body.textContent=text;return}
-    body.innerHTML=md.render(text);
+    body.innerHTML=md ? md.render(text) : fallbackMarkdown(text);
     body.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener noreferrer nofollow"});
   }
   function addMessage(role,text,typing=false){
