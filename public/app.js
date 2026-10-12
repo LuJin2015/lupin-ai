@@ -7,12 +7,14 @@
   function fallbackMarkdown(text){
     const escape=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     let src=escape(String(text)).replace(/\r\n?/g,"\n");
+    src=src.replace(/\\([*_`])/g,"$1");
     const blocks=[];
     src=src.replace(/```([\w-]*)\n([\s\S]*?)```/g,(_,lang,code)=>{blocks.push("<pre><code>"+code.replace(/\n$/,"")+"</code></pre>");return "\n@@BLOCK"+(blocks.length-1)+"@@\n"});
     src=src.replace(/^\s*(#{1,6})\s+(.+)$/gm,(_,marks,title)=>"<h"+marks.length+">"+title+"</h"+marks.length+">");
     src=src.replace(/^\s*[-*]\s+(.+)$/gm,"<li>$1</li>");
     src=src.replace(/(?:<li>[\s\S]*?<\/li>\n?)+/g,s=>"<ul>"+s+"</ul>");
     src=src.replace(/^\s*(\d+)\.\s+(.+)$/gm,"<li>$2</li>");
+    src=src.replace(/(?:<li>[\\s\\S]*?<\\/li>\\n?)+/g,s=>"<ol>"+s+"</ol>");
     src=src.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/__(.+?)__/g,"<strong>$1</strong>");
     src=src.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,"$1<em>$2</em>").replace(/(^|[^_])_([^_\n]+)_(?!_)/g,"$1<em>$2</em>");
     src=src.replace(/`([^`\n]+)`/g,"<code>$1</code>");
