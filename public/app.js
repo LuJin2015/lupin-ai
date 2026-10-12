@@ -3,6 +3,30 @@
   const messages=document.querySelector("#messages"), welcome=document.querySelector("#welcome"), toast=document.querySelector("#toast"), sidebar=document.querySelector("#sidebar");
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const history=[]; let busy=false, toastTimer;
+  const STORAGE_KEY="lupin-ai-chat-history-v1";
+  let chats=loadChats(), activeChatId=null;
+  function loadChats(){try{const v=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");return Array.isArray(v)?v:[]}catch{return []}}
+  function saveChats(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(chats.slice(0,50)))}catch{notify("Chat history could not be saved in this browser.")}}
+  function newId(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8)}
+  function currentChat(){return chats.find(chat=>chat.id===activeChatId)}
+  function saveCurrentChat(){
+    if(!history.length)return;
+    let chat=currentChat();
+    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id}
+    chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
+    chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
+  }
+  function renderChatList(){
+    const list=document.querySelector("#chat-list");if(!list)return;list.replaceChildren();
+    if(!chats.length){const empty=document.createElement("p");empty.className="history-empty";empty.textContent="Your saved chats will appear here.";list.append(empty);return}
+    chats.forEach(chat=>{const button=document.createElement("button");button.className="history-item"+(chat.id===activeChatId?" active":"");button.type="button";button.textContent=chat.title||"Untitled chat";button.title=button.textContent;button.addEventListener("click",()=>openChat(chat.id));list.append(button)});
+  }
+  function openChat(id){
+    const chat=chats.find(item=>item.id===id);if(!chat)return;
+    activeChatId=id;history.splice(0,history.length,...chat.messages.map(m=>({role:m.role,content:m.content})));
+    messages.replaceChildren();welcome.hidden=history.length>0;
+    history.forEach(m=>addMessage(m.role,m.content));renderChatList();sidebar.classList.remove("open");
+  }
   const md=window.markdownit ? window.markdownit({html:false,linkify:true,breaks:true,typographer:true}) : null;
   function fallbackMarkdown(text){
     const escape=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -27,6 +51,12 @@
     const normalized=String(text).replace(/\\([*_`])/g,"$1");
     body.innerHTML=md ? md.render(normalized) : fallbackMarkdown(normalized);
     body.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener noreferrer nofollow"});
+    body.querySelectorAll("pre").forEach(pre=>{
+      if(pre.querySelector(".copy-code"))return;
+      const button=document.createElement("button");button.type="button";button.className="copy-code";button.textContent="Copy code";
+      button.addEventListener("click",async()=>{const code=pre.querySelector("code")?.innerText||pre.innerText;try{await navigator.clipboard.writeText(code);button.textContent="Copied!";setTimeout(()=>button.textContent="Copy code",1400)}catch{const area=document.createElement("textarea");area.value=code;area.style.position="fixed";area.style.opacity="0";document.body.append(area);area.select();const ok=document.execCommand("copy");area.remove();button.textContent=ok?"Copied!":"Copy failed";setTimeout(()=>button.textContent="Copy code",1400)}});
+      pre.append(button);
+    });
   }
   function addMessage(role,text,typing=false){
     const row=document.createElement("article");row.className="message "+role;
@@ -38,13 +68,13 @@
     content.append(label,body);row.append(avatar,content);messages.append(row);row.scrollIntoView({behavior:"smooth",block:"end"});return row;
   }
   async function sendMessage(raw){
-    const text=raw.trim();if(!text||busy)return;welcome.hidden=true;addMessage("user",text);history.push({role:"user",content:text});input.value="";input.style.height="auto";
+    const text=raw.trim();if(!text||busy)return;welcome.hidden=true;addMessage("user",text);history.push({role:"user",content:text});saveCurrentChat();input.value="";input.style.height="auto";
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
       const response=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:history.slice(-20)})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
-      history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);
+      history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();
     }catch(error){thinking.remove();history.pop();notify(error.message||"Something went wrong. Try again.")}
     finally{busy=false;send.disabled=false;send.textContent="↑";input.disabled=false;input.focus()}
   }
@@ -52,6 +82,7 @@
   input.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(input.scrollHeight,180)+"px"});
   input.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});
   document.querySelectorAll("[data-prompt]").forEach(button=>button.addEventListener("click",()=>sendMessage(button.dataset.prompt||"")));
-  document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();sidebar.classList.remove("open")});
+  document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;activeChatId=null;messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();renderChatList();sidebar.classList.remove("open")});
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
+  renderChatList();
 })();
