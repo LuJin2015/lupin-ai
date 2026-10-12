@@ -1,8 +1,8 @@
 {
   "name": "lupin-ai",
   "private": true,
-  "version": "1.0.0",
-  "description": "Lupin AI chat app powered by Hugging Face",
+  "version": "1.1.0",
+  "description": "Lupin AI chat app powered by Cloudflare Workers AI",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"

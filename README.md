@@ -1,28 +1,27 @@
 # Lupin AI
 
-A modern chat assistant powered by **Qwen/Qwen3.8-27B** on Hugging Face Inference Providers, with a Cloudflare Worker keeping the API token server-side.
+A modern chat assistant powered by **Qwen 3.8 27B on Cloudflare Workers AI**. The chat API runs in a Cloudflare Worker and calls the model through the built-in `env.AI` binding.
 
 ## Setup
 
-1. Create a Hugging Face access token with Inference Providers permission: https://huggingface.co/settings/tokens
-2. In Cloudflare, make an API token that can deploy Workers and find your account ID.
-3. In this GitHub repo, open **Settings → Secrets and variables → Actions** and add:
+1. Create a Cloudflare API token with permission to deploy Workers, and find your Cloudflare account ID.
+2. In this GitHub repo, open **Settings → Secrets and variables → Actions** and add:
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCOUNT_ID`
-   - `HF_TOKEN` (your Hugging Face token)
-4. Push to `main` or run the **Deploy Lupin AI** workflow manually.
-5. The configured default URL is https://lupin-ai.lujinsg.workers.dev (it will work after a successful first deployment and if that Workers subdomain is enabled for your account).
+3. Push to `main` or run the **Deploy Lupin AI** workflow manually.
+4. The configured default URL is https://lupin-ai.lujinsg.workers.dev (it will work after a successful first deployment and if that Workers subdomain is enabled for your account).
+
+**No Hugging Face token is required.** The Worker uses Cloudflare's native Workers AI binding. Model availability, account quotas, and usage pricing are controlled by Cloudflare; check current Workers AI pricing before making the app public.
 
 ## Local development
 
 ```sh
 npm install
-npx wrangler secret put HF_TOKEN
 npm run dev
 ```
 
-Never commit or share your Hugging Face or Cloudflare tokens. Hosted inference may have usage limits or charges; check current Hugging Face pricing before making the app public.
-
 ## Model
 
-Default: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B). The app calls Hugging Face's OpenAI-compatible chat-completions endpoint.
+Default: [@cf/qwen/qwen3.8-27b](https://developers.cloudflare.com/workers-ai/models/qwen3.8-27b/), called using `env.AI.run()`.
+
+Never commit or share your Cloudflare API token.
