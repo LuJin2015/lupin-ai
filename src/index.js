@@ -9,7 +9,7 @@ function json(data, status = 200, origin = "") {
   const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Vary": "Origin" };
   if (origin === ALLOWED_ORIGIN) {
     headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN;
-    headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Content-Type";
   }
   return new Response(JSON.stringify(data), { status, headers });
@@ -97,19 +97,56 @@ async function getWebContext(env, prompt) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== "/api/chat") return env.ASSETS.fetch(request);
+    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats") return env.ASSETS.fetch(request);
     const origin = request.headers.get("Origin") || "";
     if (request.method === "OPTIONS") {
       if (origin !== ALLOWED_ORIGIN) return new Response(null, { status: 403 });
       return new Response(null, { status: 204, headers: {
         "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
         "Access-Control-Max-Age": "86400",
         "Vary": "Origin"
       }});
     }
     if (origin && origin !== ALLOWED_ORIGIN) return json({ error: "This website is not allowed to use the Lupin AI API." }, 403, origin);
+    if (url.pathname === "/api/chats") {
+      if (!env.DB) return json({ error: "D1 database binding is missing. Check wrangler.toml." }, 503, origin);
+      const clientId = (url.searchParams.get("clientId") || "").slice(0, 80);
+      if (!/^[a-zA-Z0-9_-]{16,80}$/.test(clientId)) return json({ error: "Invalid client ID." }, 400, origin);
+      try {
+        if (request.method === "GET") {
+          const result = await env.DB.prepare("SELECT id, title, messages, updated_at AS updated FROM chats WHERE client_id = ? ORDER BY updated_at DESC LIMIT 50").bind(clientId).all();
+          const chats = (result.results || []).map(row => {
+            let messages = [];
+            try { messages = JSON.parse(row.messages); } catch {}
+            return { id: row.id, title: row.title, messages, updated: row.updated };
+          });
+          return json({ chats }, 200, origin);
+        }
+        if (request.method === "POST") {
+          let body;
+          try { body = await request.json(); } catch { return json({ error: "Request body must be valid JSON." }, 400, origin); }
+          const id = String(body.id || "").slice(0, 80);
+          const title = String(body.title || "New chat").replace(/\s+/g, " ").slice(0, 120);
+          if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || !Array.isArray(body.messages) || body.messages.length > 100) return json({ error: "Invalid chat payload." }, 400, origin);
+          const messages = body.messages.map(m => ({ role: m?.role === "assistant" ? "assistant" : "user", content: String(m?.content ?? "").slice(0, 6000) }));
+          const updated = Date.now();
+          await env.DB.prepare("INSERT INTO chats (id, client_id, title, messages, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(client_id, id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated_at=excluded.updated_at").bind(id, clientId, title, JSON.stringify(messages), updated).run();
+          await env.DB.prepare("DELETE FROM chats WHERE client_id = ? AND id NOT IN (SELECT id FROM chats WHERE client_id = ? ORDER BY updated_at DESC LIMIT 50)").bind(clientId, clientId).run();
+          return json({ ok: true, updated }, 200, origin);
+        }
+        if (request.method === "DELETE") {
+          const id = (url.searchParams.get("id") || "").slice(0, 80);
+          if (id) await env.DB.prepare("DELETE FROM chats WHERE client_id = ? AND id = ?").bind(clientId, id).run();
+          else await env.DB.prepare("DELETE FROM chats WHERE client_id = ?").bind(clientId).run();
+          return json({ ok: true }, 200, origin);
+        }
+        return json({ error: "Use GET, POST, or DELETE for chat history." }, 405, origin);
+      } catch {
+        return json({ error: "Could not access chat history in the D1 database." }, 500, origin);
+      }
+    }
     if (request.method !== "POST") return json({ error: "Use POST for chat requests." }, 405, origin);
     if (!env.AI) return json({ error: "Workers AI binding is missing. Check wrangler.toml." }, 503, origin);
     let body;
