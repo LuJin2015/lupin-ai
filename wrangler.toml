@@ -12,3 +12,8 @@ binding = "AI"
 
 [browser]
 binding = "BROWSER"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lupin-cloud"
+database_id = "a77e4e58-b9d3-4fa2-9632-58d0ba4cddf3"
