@@ -2,6 +2,28 @@
   const form=document.querySelector("#chat-form"), input=document.querySelector("#message-input"), send=document.querySelector("#send-button");
   const messages=document.querySelector("#messages"), welcome=document.querySelector("#welcome"), toast=document.querySelector("#toast"), sidebar=document.querySelector("#sidebar");
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
+  const HISTORY_URL="https://lupin-ai.lujinsg.workers.dev/api/chats";
+  const CLIENT_KEY="lupin-ai-cloud-client-v1";
+  let clientId=localStorage.getItem(CLIENT_KEY);
+  if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
+  const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
+  async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
+  let cloudReady=false;
+  async function syncCloudHistory(){
+    try{
+      const data=await cloudRequest(cloudUrl());
+      const cloudChats=Array.isArray(data.chats)?data.chats:[];
+      if(!cloudChats.length&&chats.length){
+        for(const chat of chats) await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})});
+      }else if(cloudChats.length){
+        const merged=new Map(chats.map(chat=>[chat.id,chat]));
+        cloudChats.forEach(chat=>merged.set(chat.id,chat));
+        chats=Array.from(merged.values()).sort((a,b)=>(b.updated||0)-(a.updated||0)).slice(0,50);
+        saveChats();
+      }
+      cloudReady=true;renderChatList();
+    }catch(error){notify("Cloud history unavailable; this chat stays saved on this device.")}
+  }
   const history=[]; let busy=false, toastTimer;
   const STORAGE_KEY="lupin-ai-chat-history-v1";
   let chats=loadChats(), activeChatId=null;
@@ -15,6 +37,7 @@
     if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id}
     chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
     chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
+    if(cloudReady) cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})}).catch(()=>notify("Cloud save failed; local copy kept."));
   }
   function renderChatList(){
     const list=document.querySelector("#chat-list");if(!list)return;list.replaceChildren();
@@ -54,7 +77,21 @@
     body.querySelectorAll("pre").forEach(pre=>{
       if(pre.querySelector(".copy-code"))return;
       const button=document.createElement("button");button.type="button";button.className="copy-code";button.textContent="Copy code";
-      button.addEventListener("click",async()=>{const code=pre.querySelector("code")?.innerText||pre.innerText;try{await navigator.clipboard.writeText(code);button.textContent="Copied!";setTimeout(()=>button.textContent="Copy code",1400)}catch{const area=document.createElement("textarea");area.value=code;area.style.position="fixed";area.style.opacity="0";document.body.append(area);area.select();const ok=document.execCommand("copy");area.remove();button.textContent=ok?"Copied!":"Copy failed";setTimeout(()=>button.textContent="Copy code",1400)}});
+      button.addEventListener("click",async(event)=>{
+        event.preventDefault();event.stopPropagation();
+        const code=pre.querySelector("code")?.textContent ?? pre.textContent;
+        let copied=false;
+        try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(code);copied=true}}catch{}
+        if(!copied){
+          const area=document.createElement("textarea");area.value=code;area.setAttribute("readonly","");area.style.position="fixed";area.style.left="-9999px";area.style.top="0";document.body.append(area);area.focus();area.select();area.setSelectionRange(0,area.value.length);
+          try{copied=document.execCommand("copy")}catch{copied=false}area.remove();
+        }
+        button.textContent=copied?"Copied!":"Select code";
+        if(!copied){
+          const codeNode=pre.querySelector("code");if(codeNode){const range=document.createRange();range.selectNodeContents(codeNode);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);notify("Clipboard blocked by browser. Code selected—press ⌘C to copy.");}
+        }
+        setTimeout(()=>button.textContent="Copy code",1800);
+      });
       pre.append(button);
     });
   }
@@ -85,4 +122,5 @@
   document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;activeChatId=null;messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();renderChatList();sidebar.classList.remove("open")});
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
   renderChatList();
+  syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});
 })();
