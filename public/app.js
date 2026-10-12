@@ -3,14 +3,20 @@
   const messages=document.querySelector("#messages"), welcome=document.querySelector("#welcome"), toast=document.querySelector("#toast"), sidebar=document.querySelector("#sidebar");
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const history=[]; let busy=false, toastTimer;
+  const md=window.markdownit ? window.markdownit({html:false,linkify:true,breaks:true,typographer:true}) : null;
   function notify(text){toast.textContent=text;toast.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove("show"),5000)}
+  function renderMarkdown(body,text){
+    if(!md){body.textContent=text;return}
+    body.innerHTML=md.render(text);
+    body.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener noreferrer nofollow"});
+  }
   function addMessage(role,text,typing=false){
     const row=document.createElement("article");row.className="message "+role;
     const avatar=document.createElement("div");avatar.className="avatar";avatar.textContent=role==="user"?"Y":"L";
     const content=document.createElement("div");content.className="message-content";
     const label=document.createElement("div");label.className="label";label.textContent=role==="user"?"You":"Lupin AI";
     const body=document.createElement("div");body.className=typing?"typing":"message-text";
-    if(typing){body.setAttribute("aria-label","Lupin AI is thinking");for(let i=0;i<3;i++)body.append(document.createElement("span"))}else body.textContent=text;
+    if(typing){body.setAttribute("aria-label","Lupin AI is thinking");for(let i=0;i<3;i++)body.append(document.createElement("span"))}else if(role==="assistant"){renderMarkdown(body,text)}else body.textContent=text;
     content.append(label,body);row.append(avatar,content);messages.append(row);row.scrollIntoView({behavior:"smooth",block:"end"});return row;
   }
   async function sendMessage(raw){
