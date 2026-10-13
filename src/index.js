@@ -9,6 +9,32 @@ When WEB SOURCES are supplied, use them to answer the user's question and includ
 const ALLOWED_ORIGIN = "https://lujin2015.github.io";
 const MAX_BODY = 16000;
 const SESSION_DAYS = 30;
+
+const DEFAULT_LUPIN_TOKEN_LIMIT = 10000;
+const MIN_LUPIN_TOKEN_LIMIT = 500;
+const MAX_LUPIN_TOKEN_LIMIT = 100000;
+async function ensureLupinTokenTables(env) {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_budgets (owner_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_usage (owner_id TEXT NOT NULL, usage_day TEXT NOT NULL, used_tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(owner_id, usage_day))").run();
+}
+function getLupinTokenOwner(session, clientId) {
+  if (session?.user?.id) return "user:" + session.user.id;
+  const id = String(clientId || "").slice(0,80);
+  return /^[a-zA-Z0-9_-]{16,80}$/.test(id) ? "anon:" + id : null;
+}
+async function getLupinTokenStatus(env, owner) {
+  const day = new Date().toISOString().slice(0,10);
+  const [budget, usage] = await Promise.all([
+    env.DB.prepare("SELECT daily_limit FROM lupin_token_budgets WHERE owner_id=?").bind(owner).first(),
+    env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind(owner,day).first()
+  ]);
+  return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,day};
+}
+async function chargeLupinTokens(env, owner, day, amount) {
+  const now=Date.now();
+  await env.DB.prepare("INSERT INTO lupin_token_usage (owner_id,usage_day,used_tokens,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,usage_day) DO UPDATE SET used_tokens=used_tokens+excluded.used_tokens,updated_at=excluded.updated_at").bind(owner,day,amount,now).run();
+}
+
 const encoder = new TextEncoder();
 function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,""); }
 async function digest(text) { return b64(await crypto.subtle.digest("SHA-256", encoder.encode(text))); }
@@ -122,7 +148,7 @@ async function getWebContext(env, prompt) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && !url.pathname.startsWith("/api/auth/")) return env.ASSETS.fetch(request);
+    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && url.pathname !== "/api/tokens" && !url.pathname.startsWith("/api/auth/")) return env.ASSETS.fetch(request);
     const origin = request.headers.get("Origin") || "";
     if (request.method === "OPTIONS") {
       if (origin !== ALLOWED_ORIGIN) return new Response(null, { status: 403 });
@@ -196,6 +222,29 @@ export default {
         return json({error:"Account service failed. Please try again.", stage:accountStage},500,origin);
       }
     }
+
+    if (url.pathname === "/api/tokens") {
+      if (!env.DB) return json({error:"LupinTokens database is unavailable."},503,origin);
+      const session=await sessionUser(request,env);
+      let body={};
+      if(request.method==="POST"){try{body=await request.json()}catch{return json({error:"Enter a valid daily limit."},400,origin)}}
+      const owner=getLupinTokenOwner(session,body.clientId||url.searchParams.get("clientId"));
+      if(!owner)return json({error:"Could not identify this Lupin AI session. Refresh the page and try again."},400,origin);
+      try{
+        await ensureLupinTokenTables(env);
+        if(request.method==="POST"){
+          const limit=Number(body.dailyLimit);
+          if(!Number.isInteger(limit)||limit<MIN_LUPIN_TOKEN_LIMIT||limit>MAX_LUPIN_TOKEN_LIMIT)return json({error:"Daily limit must be a whole number from 500 to 100,000."},400,origin);
+          await env.DB.prepare("INSERT INTO lupin_token_budgets (owner_id,daily_limit,updated_at) VALUES (?,?,?) ON CONFLICT(owner_id) DO UPDATE SET daily_limit=excluded.daily_limit,updated_at=excluded.updated_at").bind(owner,limit,Date.now()).run();
+        }else if(request.method!=="GET"){
+          return json({error:"Use GET to view or POST to update LupinTokens."},405,origin);
+        }
+        return json(await getLupinTokenStatus(env,owner),200,origin);
+      }catch(error){
+        console.error("LupinTokens API failure",error?.message||error);
+        return json({error:"Could not load or save your LupinTokens budget."},500,origin);
+      }
+    }
     if (url.pathname === "/api/chats") {
       if (!env.DB) return json({ error: "D1 database binding is missing. Check wrangler.toml." }, 503, origin);
       const accountSession = await sessionUser(request, env);
@@ -251,6 +300,26 @@ export default {
       }
       images.push({ type, data });
     }
+
+    let tokenOwner=null, tokenDay=new Date().toISOString().slice(0,10), tokenLimitStatus=null, tokenEstimate=0;
+    if(env.DB){
+      try{
+        await ensureLupinTokenTables(env);
+        tokenOwner=getLupinTokenOwner(await sessionUser(request,env),body.clientId);
+        if(tokenOwner){
+          tokenLimitStatus=await getLupinTokenStatus(env,tokenOwner);
+          tokenEstimate=Math.ceil(messages.reduce((sum,m)=>sum+m.content.length,0)/4)+images.length*768;
+          const expectedOutput=Math.min(1200,Math.max(150,Math.ceil(tokenEstimate*0.6)));
+          if(tokenLimitStatus.used+tokenEstimate+expectedOutput>tokenLimitStatus.dailyLimit){
+            return json({error:"You've reached your LupinTokens daily limit. Raise your limit in LupinTokens settings or try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
+          }
+          tokenDay=tokenLimitStatus.day;
+        }
+      }catch(error){
+        console.error("LupinTokens budget check failed",error?.message||error);
+        return json({error:"Could not check the LupinTokens budget. Please try again."},503,origin);
+      }
+    }
     try {
       const lastUser = [...messages].reverse().find(m => m.role === "user")?.content || "";
       let webContext = "";
@@ -269,7 +338,14 @@ export default {
       const result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
       const reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content;
       if (typeof reply !== "string" || !reply.trim()) return json({ error: "The model returned an empty response. Try again." }, 502, origin);
-      return json({ reply, model, browsed: Boolean(webContext && !webContext.startsWith("WEB BROWSING ERROR:")) }, 200, origin);
+      let lupinTokens=null;
+      if(tokenOwner){
+        const charged=Math.max(1,Math.ceil((messages.reduce((sum,m)=>sum+m.content.length,0)+reply.length)/4)+images.length*768);
+        await chargeLupinTokens(env,tokenOwner,tokenDay,charged);
+        const updated=await getLupinTokenStatus(env,tokenOwner);
+        lupinTokens={...updated,charged};
+      }
+      return json({ reply, model, browsed: Boolean(webContext && !webContext.startsWith("WEB BROWSING ERROR:")), ...(lupinTokens?{lupinTokens}:{}) }, 200, origin);
     } catch {
       return json({ error: "Cloudflare Workers AI could not complete the request. Check your Workers AI access and usage limits, then try again." }, 502, origin);
     }
