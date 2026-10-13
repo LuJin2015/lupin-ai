@@ -121,6 +121,7 @@
   document.querySelectorAll("[data-prompt]").forEach(button=>button.addEventListener("click",()=>sendMessage(button.dataset.prompt||"")));
   document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;activeChatId=null;messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();renderChatList();sidebar.classList.remove("open")});
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
+  window.addEventListener("lupin-account-changed",()=>{cloudReady=false;syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});});
   renderChatList();
   syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});
 })();
