@@ -46,13 +46,23 @@ function passwordHash(password, salt) {
 }
 function randomToken(bytes=32) { const data=crypto.getRandomValues(new Uint8Array(bytes)); return b64(data); }
 function authUser(row) { return row ? {id:row.id, username:row.username, createdAt:row.created_at} : null; }
+async function cloudHex(text) { const b=await crypto.subtle.digest("SHA-256",encoder.encode(text)); return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join(""); }
+async function cloudPasswordHash(password,salt) {
+  const key=await crypto.subtle.importKey("raw",encoder.encode(password),"PBKDF2",false,["deriveBits"]);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt:encoder.encode(salt),iterations:100000,hash:"SHA-256"},key,256);
+  return [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
 async function sessionUser(request, env) {
   const header=request.headers.get("Authorization")||"";
   const token=header.startsWith("Bearer ")?header.slice(7):"";
-  if (!token || token.length>100) return null;
+  if (!token || token.length>200) return null;
+  // Shared Lupin Cloud session first; keep old Lupin AI sessions valid during migration.
+  const sharedHash=await cloudHex(token);
+  const shared=await env.DB.prepare("SELECT a.id,a.username,a.created_at,s.token_hash FROM lupin_sessions s JOIN lupin_accounts a ON a.id=s.account_id WHERE s.token_hash=? AND s.expires_at>?").bind(sharedHash,new Date().toISOString()).first();
+  if(shared) return {user:{id:shared.id,username:shared.username,createdAt:shared.created_at},tokenHash:sharedHash,shared:true};
   const tokenHash=await digest(token);
-  const row=await env.DB.prepare("SELECT lupin_ai_users.id, lupin_ai_users.username, lupin_ai_users.created_at, lupin_ai_sessions.token_hash FROM lupin_ai_sessions JOIN lupin_ai_users ON lupin_ai_users.id=lupin_ai_sessions.user_id WHERE lupin_ai_sessions.token_hash=? AND lupin_ai_sessions.expires_at>?").bind(tokenHash,Date.now()).first();
-  return row ? {user:authUser(row),tokenHash} : null;
+  const row=await env.DB.prepare("SELECT lupin_ai_users.id,lupin_ai_users.username,lupin_ai_users.created_at,lupin_ai_sessions.token_hash FROM lupin_ai_sessions JOIN lupin_ai_users ON lupin_ai_users.id=lupin_ai_sessions.user_id WHERE lupin_ai_sessions.token_hash=? AND lupin_ai_sessions.expires_at>?").bind(tokenHash,Date.now()).first();
+  return row ? {user:authUser(row),tokenHash,shared:false} : null;
 }
 
 
@@ -164,62 +174,57 @@ export default {
 
     if (url.pathname.startsWith("/api/auth/")) {
       if (!env.DB) return json({error:"Account database is unavailable."},503,origin);
-      let accountStage = "routing";
+      let accountStage="routing";
       try {
-        if (url.pathname === "/api/auth/register" && request.method === "POST") {
-          accountStage = "register-validation";
-          let body; try { body=await request.json(); } catch { return json({error:"Enter valid account details."},400,origin); }
-          const username=String(body.username||"").trim();
-          const password=String(body.password||"");
-          if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return json({error:"Username must be 3–24 characters using letters, numbers, or underscores."},400,origin);
-          if (password.length<10 || password.length>128) return json({error:"Password must be 10–128 characters."},400,origin);
-          accountStage = "register-password-hash";
-          const id=crypto.randomUUID(), salt=randomToken(16), hash=await passwordHash(password,salt), now=Date.now();
-          accountStage = "register-user-insert";
-          try { await env.DB.prepare("INSERT INTO lupin_ai_users (id,username,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)").bind(id,username,salt,hash,now).run(); }
-          catch (error) {
-            const existing = await env.DB.prepare("SELECT id FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
-            if (existing) return json({error:"That username is already taken."},409,origin);
-            throw error;
+        if (url.pathname==="/api/auth/register" && request.method==="POST") {
+          let body; try{body=await request.json()}catch{return json({error:"Enter valid account details."},400,origin)}
+          const username=String(body.username||"").trim(),password=String(body.password||"");
+          if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return json({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);
+          if(password.length<8||password.length>128)return json({error:"Password must be 8–128 characters."},400,origin);
+          const existing=await env.DB.prepare("SELECT id FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+          if(existing)return json({error:"That Lupin Cloud username is already taken."},409,origin);
+          const id=crypto.randomUUID(),salt=crypto.randomUUID(),hash=await cloudPasswordHash(password,salt),stored=salt+"$"+hash,created= new Date().toISOString();
+          await env.DB.prepare("INSERT INTO lupin_accounts(id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(id,username,stored,created).run();
+          const token=randomToken(),tokenHash=await cloudHex(token),expires=new Date(Date.now()+SESSION_DAYS*86400000).toISOString();
+          await env.DB.prepare("INSERT INTO lupin_sessions(token_hash,account_id,expires_at,created_at) VALUES(?,?,?,?)").bind(tokenHash,id,expires,created).run();
+          return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:created}},201,origin);
+        }
+        if(url.pathname==="/api/auth/login"&&request.method==="POST"){
+          let body;try{body=await request.json()}catch{return json({error:"Enter your username and password."},400,origin)}
+          const username=String(body.username||"").trim(),password=String(body.password||"");
+          if(!username||!password||password.length>128)return json({error:"Enter your username and password."},400,origin);
+          let row=await env.DB.prepare("SELECT id,username,password_hash,created_at FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
+          if(row){
+            const parts=String(row.password_hash||"").split("$");
+            if(parts.length!==2||await cloudPasswordHash(password,parts[0])!==parts[1])return json({error:"Username or password is incorrect."},401,origin);
+          } else {
+            // Migrate a legacy Lupin AI account after a successful old-password check.
+            const legacy=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
+            if(!legacy)return json({error:"Username or password is incorrect."},401,origin);
+            const legacyHash=passwordHash(password,legacy.password_salt);
+            if(legacyHash!==legacy.password_hash)return json({error:"Username or password is incorrect."},401,origin);
+            const salt=crypto.randomUUID(),hash=await cloudPasswordHash(password,salt),created=new Date(Number(legacy.created_at)||Date.now()).toISOString();
+            await env.DB.prepare("INSERT INTO lupin_accounts(id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(legacy.id,legacy.username,salt+"$"+hash,created).run();
+            row={id:legacy.id,username:legacy.username,password_hash:salt+"$"+hash,created_at:created};
           }
-          accountStage = "register-session-insert";
-          const token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
-          await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,id,expires,now).run();
-          return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:now}},201,origin);
+          const token=randomToken(),tokenHash=await cloudHex(token),created=new Date().toISOString(),expires=new Date(Date.now()+SESSION_DAYS*86400000).toISOString();
+          await env.DB.prepare("INSERT INTO lupin_sessions(token_hash,account_id,expires_at,created_at) VALUES(?,?,?,?)").bind(tokenHash,row.id,expires,created).run();
+          return json({ok:true,token,expiresAt:expires,user:{id:row.id,username:row.username,createdAt:row.created_at}},200,origin);
         }
-        if (url.pathname === "/api/auth/login" && request.method === "POST") {
-          accountStage = "login-validation";
-          let body; try { body=await request.json(); } catch { return json({error:"Enter your username and password."},400,origin); }
-          const username=String(body.username||"").trim(), password=String(body.password||"");
-          if (!username || !password || password.length>128) return json({error:"Enter your username and password."},400,origin);
-          accountStage = "login-user-query";
-          const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
-          const salt = row ? row.password_salt : "lupin-ai-invalid-user-salt";
-          accountStage = "login-password-hash";
-          // Match the portable PBKDF2-HMAC-SHA256 implementation used at registration.
-          // The derived key format stays identical, so existing accounts remain valid.
-          const hash = passwordHash(password, salt);
-          if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
-          accountStage = "login-session-insert";
-          const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
-          await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,row.id,expires,now).run();
-          return json({ok:true,token,expiresAt:expires,user:authUser(row)},200,origin);
-        }
-        if (url.pathname === "/api/auth/me" && request.method === "GET") {
-          accountStage = "restore-session";
+        if(url.pathname==="/api/auth/me"&&request.method==="GET"){
           const session=await sessionUser(request,env);
-          if (!session) return json({error:"Please sign in again."},401,origin);
+          if(!session)return json({error:"Please sign in again."},401,origin);
           return json({user:session.user},200,origin);
         }
-        if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+        if(url.pathname==="/api/auth/logout"&&request.method==="POST"){
           const session=await sessionUser(request,env);
-          if (session) await env.DB.prepare("DELETE FROM lupin_ai_sessions WHERE token_hash=?").bind(session.tokenHash).run();
+          if(session)await env.DB.prepare(session.shared?"DELETE FROM lupin_sessions WHERE token_hash=?":"DELETE FROM lupin_ai_sessions WHERE token_hash=?").bind(session.tokenHash).run();
           return json({ok:true},200,origin);
         }
         return json({error:"Unknown account action."},404,origin);
-      } catch (error) {
-        console.error("Lupin AI account API failure", url.pathname, accountStage, error?.message || error);
-        return json({error:"Account service failed. Please try again.", stage:accountStage},500,origin);
+      } catch(error) {
+        console.error("Lupin Cloud account API failure",url.pathname,accountStage,error?.message||error);
+        return json({error:"Account service failed. Please try again."},500,origin);
       }
     }
 
