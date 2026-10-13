@@ -48,7 +48,7 @@
   });
   async function restore() {
     if (!token) { renderUser(); return; }
-    try { const data = await request("me"); user = data.user; renderUser(); }
+    try { const data = await request("me"); user = data.user; renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}})); }
     catch { token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser(); }
   }
   window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:restore };
