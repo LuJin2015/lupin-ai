@@ -301,6 +301,70 @@ export default {
       images.push({ type, data });
     }
 
+
+    // Lupin Airlines actions use the user's separate airline login token.
+    const airlineToken = String(body.airlineToken || "").slice(0, 200);
+    const latestUserText = [...messages].reverse().find(m => m.role === "user")?.content || "";
+    const airlineRelated = /\b(lupin miles|miles balance|my miles|how many miles|my bookings|upcoming flights|my flights|list flights|available flights|book\s+(?:lp\s*\d+|flight)|confirm booking|cancel booking|confirm cancellation)\b/i.test(latestUserText);
+    if (airlineRelated) {
+      if (!airlineToken) return json({ reply: "Connect your Lupin Airlines account first using **Connect airline** in the top bar. Your Lupin AI account and airline account are separate, so I need your airline sign-in to access your bookings and miles." }, 200, origin);
+      const airlineBase = "https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
+      const airlineFetch = async (path, method="GET", payload) => {
+        const response = await fetch(airlineBase + path, {
+          method, headers: { "Authorization": "Bearer " + airlineToken, ...(payload ? {"Content-Type":"application/json"} : {}) },
+          ...(payload ? {body:JSON.stringify(payload)} : {})
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Lupin Airlines request failed (" + response.status + ").");
+        return data;
+      };
+      try {
+        if (/\b(lupin miles|miles balance|my miles|how many miles)\b/i.test(latestUserText)) {
+          const me = await airlineFetch("/me");
+          return json({reply: "You have **" + Number(me.miles || 0).toLocaleString() + " Lupin Miles**. ✈️"},200,origin);
+        }
+        if (/\b(my bookings|upcoming flights|my flights)\b/i.test(latestUserText)) {
+          const data = await airlineFetch("/bookings");
+          const bookings = data.bookings || [];
+          if (!bookings.length) return json({reply:"You don't have any bookings yet."},200,origin);
+          return json({reply:"## Your Lupin Airlines bookings\n\n" + bookings.map(b => "- **"+b.bookingId+"** — "+b.flight+" to "+b.destination+" · "+(b.date||"Date not set")+" at "+b.time+" · Gate "+b.gate+" · "+b.status).join("\n")},200,origin);
+        }
+        if (/\b(list flights|available flights)\b/i.test(latestUserText)) {
+          const data = await airlineFetch("/flights");
+          const flights = data.flights || [];
+          return json({reply: flights.length ? "## Available Lupin Airlines flights\n\n"+flights.map(f=>"- **"+f.flight+"** — "+f.destination+" · "+f.departure+" · Gate "+f.gate+" · "+f.price).join("\n") : "No flights are currently listed."},200,origin);
+        }
+        const cancelMatch = latestUserText.match(/\b(?:confirm\s+)?cancel(?:lation)?(?:\s+booking)?\s+(LUP-[A-Z0-9]+)\b/i);
+        if (cancelMatch) {
+          const bookingId = cancelMatch[1].toUpperCase();
+          if (!/^\s*confirm\b/i.test(latestUserText)) return json({reply:"Please confirm before I cancel **"+bookingId+"**. Reply: **confirm cancel "+bookingId+"**."},200,origin);
+          await airlineFetch("/bookings/"+encodeURIComponent(bookingId)+"/cancel","POST",{});
+          const me = await airlineFetch("/me");
+          return json({reply:"Booking **"+bookingId+"** has been cancelled. Your current balance is **"+Number(me.miles||0).toLocaleString()+" Lupin Miles**."},200,origin);
+        }
+        const bookMatch = latestUserText.match(/\b(?:confirm\s+)?book(?:\s+(?:flight))?\s+(LP\s*\d{3,4})\b/i);
+        if (bookMatch) {
+          const flightCode = bookMatch[1].replace(/\s+/g," ").toUpperCase().replace(/^(LP)\s*/,"$1 ");
+          const flightsData = await airlineFetch("/flights");
+          const flight = (flightsData.flights||[]).find(f=>String(f.flight).replace(/\s+/g," ").toUpperCase()===flightCode);
+          if (!flight) return json({reply:"I couldn't find **"+flightCode+"** in the current Lupin Airlines flight list. Ask me to list available flights."},200,origin);
+          if (!/^\s*confirm\b/i.test(latestUserText)) {
+            const dateMatch = latestUserText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+            const date = dateMatch ? dateMatch[1] : new Date().toISOString().slice(0,10);
+            return json({reply:"Please confirm this booking:\n\n- **"+flight.flight+"** — "+flight.destination+"\n- Departure: "+flight.departure+" · Gate "+flight.gate+"\n- Fare: "+flight.price+"\n- Date: "+date+"\n\nReply **confirm booking "+flight.flight+"** to complete it. I'll only create the booking after your confirmation."},200,origin);
+          }
+          const dateMatch = latestUserText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+          const result = await airlineFetch("/bookings","POST",{flight:flight.flight,date:dateMatch?dateMatch[1]:new Date().toISOString().slice(0,10),passengers:"1 passenger"});
+          const me = await airlineFetch("/me");
+          return json({reply:"## Booking confirmed! 🎫\n\n- **Booking reference:** "+result.bookingId+"\n- **Flight:** "+flight.flight+" to "+flight.destination+"\n- **Departure:** "+flight.departure+" · Gate "+flight.gate+"\n- **Miles earned:** "+Number(result.milesEarned||0).toLocaleString()+"\n- **Current balance:** "+Number(me.miles||0).toLocaleString()+" Lupin Miles"},200,origin);
+        }
+      } catch (error) {
+        const message = String(error.message || error);
+        if (/log in|please log in|unauthori[sz]ed|invalid token/i.test(message)) return json({reply:"Your Lupin Airlines connection has expired. Choose **Connect airline** and sign in again."},200,origin);
+        return json({reply:"I couldn't complete that Lupin Airlines request: "+message},200,origin);
+      }
+    }
+
     let tokenOwner=null, tokenDay=new Date().toISOString().slice(0,10), tokenLimitStatus=null, tokenEstimate=0;
     if(env.DB){
       try{
