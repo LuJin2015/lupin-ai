@@ -20,7 +20,7 @@ async function sessionUser(request, env) {
   const token=header.startsWith("Bearer ")?header.slice(7):"";
   if (!token || token.length>100) return null;
   const tokenHash=await digest(token);
-  const row=await env.DB.prepare("SELECT users.id, users.username, users.created_at, sessions.token_hash FROM lupin_ai_sessions JOIN lupin_ai_users ON lupin_ai_users.id=lupin_ai_sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(tokenHash,Date.now()).first();
+  const row=await env.DB.prepare("SELECT lupin_ai_users.id, lupin_ai_users.username, lupin_ai_users.created_at, lupin_ai_sessions.token_hash FROM lupin_ai_sessions JOIN lupin_ai_users ON lupin_ai_users.id=lupin_ai_sessions.user_id WHERE lupin_ai_sessions.token_hash=? AND lupin_ai_sessions.expires_at>?").bind(tokenHash,Date.now()).first();
   return row ? {user:authUser(row),tokenHash} : null;
 }
 
