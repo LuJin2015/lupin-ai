@@ -151,5 +151,5 @@
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
   window.addEventListener("lupin-account-changed",()=>{cloudReady=false;syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});});
   renderChatList();
-  syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});
+  syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});
 })();
