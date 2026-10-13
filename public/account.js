@@ -19,7 +19,7 @@
     const status = $("account-status");
     status.hidden = !user;
     status.textContent = user ? "Signed in" : "";
-    if (user) { $("account-title").textContent = "You're signed in."; $("account-subtitle").textContent = "Your Lupin AI account is ready."; $("account-submit").hidden = true; $("account-switch").textContent = "Sign out"; $("account-switch").dataset.signout = "true"; }
+    if (user) { $("account-title").textContent = "You're signed in."; $("account-subtitle").textContent = sharedSession()?.token === token ? "Your Lupin AI account is ready. Lupin Cloud sign-in is shared across supported apps." : "This older session is AI-only. Sign out and sign in again to enable shared Lupin Cloud sign-in."; $("account-submit").hidden = true; $("account-switch").textContent = "Sign out"; $("account-switch").dataset.signout = "true"; }
     else { $("account-title").textContent = registering ? "Create your account." : "Welcome back."; $("account-subtitle").textContent = registering ? "Choose a username and a unique password." : "Sign in to your Lupin AI account, or create one to get started."; $("account-submit").hidden = false; $("account-submit").textContent = registering ? "Create account" : "Sign in"; $("account-switch").textContent = registering ? "Already have an account? Sign in" : "New here? Create an account"; delete $("account-switch").dataset.signout; }
     $("account-password").autocomplete = registering ? "new-password" : "current-password";
     $("account-hint").textContent = registering ? "Use at least 10 characters. Usernames use letters, numbers, and underscores." : "Enter your account password.";
