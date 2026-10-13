@@ -7,7 +7,7 @@
   async function request(path, options = {}) {
     const response = await fetch(API + path, { ...options, headers: { "Content-Type": "application/json", ...(token ? {Authorization:"Bearer "+token} : {}), ...(options.headers||{}) } });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Account request failed.");
+    if (!response.ok) throw new Error(data.error ? data.error + (data.stage ? " (stage: " + data.stage + ")" : "") : "Account request failed.");
     return data;
   }
   function showError(message) { $("account-error").textContent = message || ""; }
