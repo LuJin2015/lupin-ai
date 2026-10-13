@@ -3,7 +3,8 @@
   const TOKEN_KEY = "lupin-ai-session-v1";
   const $ = id => document.getElementById(id);
   const backdrop = $("account-backdrop"), form = $("account-form"), openBtn = $("account-open");
-  let registering = false, user = null, token = localStorage.getItem(TOKEN_KEY) || "";
+  let registering = false, user = null, token = localStorage.getItem(TOKEN_KEY) || (() => { try { return JSON.parse(localStorage.getItem("lupinCloudAccount") || "null")?.token || ""; } catch { return ""; } })();
+  if (token) localStorage.setItem(TOKEN_KEY, token);
   async function request(path, options = {}) {
     const response = await fetch(API + path, { ...options, headers: { "Content-Type": "application/json", ...(token ? {Authorization:"Bearer "+token} : {}), ...(options.headers||{}) } });
     const data = await response.json().catch(() => ({}));
