@@ -310,12 +310,23 @@ export default {
       if (!airlineToken) return json({ reply: "Connect your Lupin Airlines account first using **Connect airline** in the top bar. Your Lupin AI account and airline account are separate, so I need your airline sign-in to access your bookings and miles." }, 200, origin);
       const airlineBase = "https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
       const airlineFetch = async (path, method="GET", payload) => {
-        const response = await fetch(airlineBase + path, {
-          method, headers: { "Authorization": "Bearer " + airlineToken, ...(payload ? {"Content-Type":"application/json"} : {}) },
+        const endpoint = new URL(airlineBase + path);
+        const response = await fetch(endpoint, {
+          method,
+          headers: { "Accept": "application/json", "Authorization": "Bearer " + airlineToken, ...(payload ? {"Content-Type":"application/json"} : {}) },
           ...(payload ? {body:JSON.stringify(payload)} : {})
         });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "Lupin Airlines request failed (" + response.status + ").");
+        const contentType = response.headers.get("content-type") || "";
+        const raw = await response.text();
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch {}
+        if (!response.ok) {
+          const detail = data.error || (contentType.includes("json") ? "" : " Non-JSON response from " + endpoint.host + ": " + raw.slice(0,120).replace(/\s+/g," "));
+          throw new Error("Lupin Airlines " + path + " returned HTTP " + response.status + "." + (detail ? " " + detail : ""));
+        }
+        if (!contentType.includes("json") || !data || typeof data !== "object") {
+          throw new Error("Lupin Airlines " + path + " returned an unexpected response (content-type: " + (contentType || "missing") + ").");
+        }
         return data;
       };
       try {
