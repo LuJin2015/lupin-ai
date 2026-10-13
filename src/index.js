@@ -305,7 +305,7 @@ export default {
     // Lupin Airlines actions use the user's separate airline login token.
     const airlineToken = String(body.airlineToken || "").slice(0, 200);
     const latestUserText = [...messages].reverse().find(m => m.role === "user")?.content || "";
-    const airlineRelated = /\b(lupin miles|miles balance|my miles|how many miles|my bookings|upcoming flights|my flights|list flights|available flights|book\s+(?:lp\s*\d+|flight)|confirm booking|cancel booking|confirm cancellation)\b/i.test(latestUserText);
+    const airlineRelated = /\b(lupin miles|miles balance|my miles|how many miles|my bookings|upcoming flights|my flights|list flights|available flights|book\s+(?:lp\s*\d+|flight)|confirm booking|cancel booking|confirm cancellation|cancel(?:lation)?(?:\s+booking)?\s+LUP-[A-Z0-9]+|confirm\s+cancel\s+LUP-[A-Z0-9]+)\b/i.test(latestUserText);
     if (airlineRelated) {
       if (!airlineToken) return json({ reply: "Connect your Lupin Airlines account first using **Connect airline** in the top bar. Your Lupin AI account and airline account are separate, so I need your airline sign-in to access your bookings and miles." }, 200, origin);
       const airlineBase = "https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
