@@ -1,6 +1,8 @@
 (() => {
   const form=document.querySelector("#chat-form"), input=document.querySelector("#message-input"), send=document.querySelector("#send-button");
   const messages=document.querySelector("#messages"), welcome=document.querySelector("#welcome"), toast=document.querySelector("#toast"), sidebar=document.querySelector("#sidebar");
+  const fileInput=document.querySelector("#file-input"), attachButton=document.querySelector("#attach-button"), attachmentList=document.querySelector("#attachment-list");
+  let pendingFiles=[];
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const HISTORY_URL="https://lupin-ai.lujinsg.workers.dev/api/chats";
   const CLIENT_KEY="lupin-ai-cloud-client-v1";
@@ -26,15 +28,17 @@
   }
   const history=[]; let busy=false, toastTimer;
   const STORAGE_KEY="lupin-ai-chat-history-v1";
-  let chats=loadChats(), activeChatId=null;
+  let chats=loadChats(), activeChatId=new URLSearchParams(location.search).get("chat");
   function loadChats(){try{const v=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");return Array.isArray(v)?v:[]}catch{return []}}
   function saveChats(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(chats.slice(0,50)))}catch{notify("Chat history could not be saved in this browser.")}}
   function newId(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8)}
   function currentChat(){return chats.find(chat=>chat.id===activeChatId)}
+  function setChatUrl(id,push=false){const url=new URL(location.href);if(id)url.searchParams.set("chat",id);else url.searchParams.delete("chat");const state={chatId:id||null};if(push)window.history.pushState(state,"",url);else window.history.replaceState(state,"",url)}
+  async function copyChatUrl(){if(!activeChatId){notify("Send a message first to create a chat link.");return}const url=new URL(location.href);url.searchParams.set("chat",activeChatId);try{await navigator.clipboard.writeText(url.href);notify("Chat link copied.");}catch{window.prompt("Copy this chat link:",url.href)}}
   function saveCurrentChat(){
     if(!history.length)return;
     let chat=currentChat();
-    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id}
+    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id;setChatUrl(chat.id,true)}
     chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
     chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
     if(cloudReady) cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})}).catch(()=>notify("Cloud save failed; local copy kept."));
@@ -46,7 +50,7 @@
   }
   function openChat(id){
     const chat=chats.find(item=>item.id===id);if(!chat)return;
-    activeChatId=id;history.splice(0,history.length,...chat.messages.map(m=>({role:m.role,content:m.content})));
+    activeChatId=id;setChatUrl(id,true);history.splice(0,history.length,...chat.messages.map(m=>({role:m.role,content:m.content})));
     messages.replaceChildren();welcome.hidden=history.length>0;
     history.forEach(m=>addMessage(m.role,m.content));renderChatList();sidebar.classList.remove("open");
   }
@@ -104,24 +108,48 @@
     if(typing){body.setAttribute("aria-label","Lupin AI is thinking");for(let i=0;i<3;i++)body.append(document.createElement("span"))}else if(role==="assistant"){renderMarkdown(body,text)}else body.textContent=text;
     content.append(label,body);row.append(avatar,content);messages.append(row);row.scrollIntoView({behavior:"smooth",block:"end"});return row;
   }
-  async function sendMessage(raw){
-    const text=raw.trim();if(!text||busy)return;welcome.hidden=true;addMessage("user",text);history.push({role:"user",content:text});saveCurrentChat();input.value="";input.style.height="auto";
+  function humanSize(bytes){return bytes<1024*1024?Math.max(1,Math.round(bytes/1024))+" KB":(bytes/1024/1024).toFixed(1)+" MB"}
+  function renderAttachments(){if(!attachmentList)return;attachmentList.replaceChildren();pendingFiles.forEach((file,index)=>{const chip=document.createElement("div");chip.className="attachment-chip";const icon=document.createElement("span");icon.className="attachment-icon";icon.textContent=file.type.startsWith("image/")?"▧":"▤";const details=document.createElement("span");details.className="attachment-details";const name=document.createElement("b");name.textContent=file.name;const meta=document.createElement("small");meta.textContent=humanSize(file.size)+(file.extractedText?" · text extracted":file.type.startsWith("image/")?" · image ready":"");details.append(name,meta);const remove=document.createElement("button");remove.type="button";remove.className="attachment-remove";remove.textContent="×";remove.setAttribute("aria-label","Remove "+file.name);remove.addEventListener("click",()=>{pendingFiles.splice(index,1);renderAttachments()});chip.append(icon,details,remove);attachmentList.append(chip)});attachmentList.hidden=pendingFiles.length===0}
+  function readAsDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error("Could not read "+file.name));reader.readAsDataURL(file)})}
+  async function extractOfficeText(file){
+    const ext=file.name.toLowerCase().split(".").pop();
+    if(ext==="docx"){if(!window.mammoth)throw new Error("Word document reader is still loading. Try again in a moment.");const result=await window.mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()});return result.value.slice(0,80000)}
+    if(ext==="xlsx"||ext==="xls"){if(!window.XLSX)throw new Error("Excel document reader is still loading. Try again in a moment.");const book=window.XLSX.read(await file.arrayBuffer(),{type:"array"});return book.SheetNames.map(name=>"SHEET: "+name+"\n"+window.XLSX.utils.sheet_to_csv(book.Sheets[name])).join("\n\n").slice(0,80000)}
+    if(ext==="pptx"){if(!window.JSZip)throw new Error("PowerPoint document reader is still loading. Try again in a moment.");const zip=await window.JSZip.loadAsync(await file.arrayBuffer());const names=Object.keys(zip.files).filter(name=>/^ppt\/slides\/slide\d+\.xml$/.test(name)).sort((a,b)=>Number(a.match(/slide(\d+)/)[1])-Number(b.match(/slide(\d+)/)[1]));const slides=[];for(const name of names){const xml=await zip.files[name].async("text");const doc=new DOMParser().parseFromString(xml,"application/xml");slides.push("SLIDE "+name.match(/slide(\d+)/)[1]+"\n"+Array.from(doc.getElementsByTagName("a:t")).map(node=>node.textContent||"").join(" "))}return slides.join("\n\n").slice(0,80000)}
+    throw new Error("Unsupported file type. Use DOCX, XLSX/XLS, or PPTX (not legacy .doc or .ppt).");
+  }
+  async function prepareAttachment(file){
+    const ext=file.name.toLowerCase().split(".").pop();const image=file.type.startsWith("image/")||["png","jpg","jpeg","webp"].includes(ext);
+    if(image){if(!["image/png","image/jpeg","image/webp"].includes(file.type))throw new Error(file.name+": use PNG, JPEG, or WebP images.");if(file.size>4*1024*1024)throw new Error(file.name+": images must be 4 MB or smaller.");return{name:file.name,type:file.type,size:file.size,imageData:await readAsDataUrl(file),extractedText:""}}
+    if(file.size>10*1024*1024)throw new Error(file.name+": Office files must be 10 MB or smaller.");
+    const extractedText=await extractOfficeText(file);return{name:file.name,type:file.type||"application/octet-stream",size:file.size,imageData:"",extractedText}
+  }
+  attachButton?.addEventListener("click",()=>fileInput.click());
+  fileInput?.addEventListener("change",async()=>{const selected=Array.from(fileInput.files||[]);fileInput.value="";if(pendingFiles.length+selected.length>5){notify("Attach up to 5 files per message.");return}for(const file of selected){try{const ready=await prepareAttachment(file);pendingFiles.push(ready)}catch(error){notify(error.message||"Could not attach file.")}}renderAttachments()});
+  async function sendMessage(raw,files=[]){
+    const text=raw.trim();if((!text&&!files.length)||busy)return;
+    const officeText=files.filter(f=>f.extractedText).map(f=>"\n\n[Attached Office file: "+f.name+"]\n"+f.extractedText).join("");
+    const imageLabels=files.filter(f=>f.imageData).map(f=>"[Attached image: "+f.name+"]").join("\n");
+    const storedText=(text||"Please inspect the attached files.")+(imageLabels?"\n"+imageLabels:"")+officeText;
+    welcome.hidden=true;addMessage("user",storedText);history.push({role:"user",content:storedText});saveCurrentChat();input.value="";input.style.height="auto";pendingFiles=[];renderAttachments();
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
-      const response=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:history.slice(-20)})});
+      const response=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:history.slice(-20),attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
       history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();
     }catch(error){thinking.remove();history.pop();notify(error.message||"Something went wrong. Try again.")}
     finally{busy=false;send.disabled=false;send.textContent="↑";input.disabled=false;input.focus()}
   }
-  form.addEventListener("submit",e=>{e.preventDefault();sendMessage(input.value)});
+  form.addEventListener("submit",e=>{e.preventDefault();sendMessage(input.value,pendingFiles.slice())});
   input.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(input.scrollHeight,180)+"px"});
   input.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});
   document.querySelectorAll("[data-prompt]").forEach(button=>button.addEventListener("click",()=>sendMessage(button.dataset.prompt||"")));
-  document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;activeChatId=null;messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();renderChatList();sidebar.classList.remove("open")});
+  document.querySelector("#new-chat").addEventListener("click",()=>{history.length=0;activeChatId=null;setChatUrl(null,true);messages.replaceChildren();welcome.hidden=false;input.value="";input.focus();renderChatList();sidebar.classList.remove("open")});
+  window.addEventListener("popstate",()=>{const id=new URLSearchParams(location.search).get("chat");if(id&&chats.some(c=>c.id===id))openChat(id);else if(!id){activeChatId=null;history.length=0;messages.replaceChildren();welcome.hidden=false;renderChatList()}});
+  document.querySelector("#share-chat")?.addEventListener("click",copyChatUrl);
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
-  window.addEventListener("lupin-account-changed",()=>{cloudReady=false;syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});});
+  window.addEventListener("lupin-account-changed",()=>{cloudReady=false;syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});});
   renderChatList();
   syncCloudHistory().then(()=>{if(!history.length&&chats.length)openChat(chats[0].id)});
 })();
