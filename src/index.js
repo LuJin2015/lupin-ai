@@ -10,7 +10,7 @@ function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes)))
 async function digest(text) { return b64(await crypto.subtle.digest("SHA-256", encoder.encode(text))); }
 async function passwordHash(password, salt) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:"SHA-256"}, key, 256);
+  const bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:{name:"SHA-256"}}, key, 256);
   return b64(bits);
 }
 function randomToken(bytes=32) { const data=crypto.getRandomValues(new Uint8Array(bytes)); return b64(data); }
@@ -169,7 +169,7 @@ export default {
           accountStage = "login-password-derive";
           let bits;
           try {
-            bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:"SHA-256"}, key, 256);
+            bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:{name:"SHA-256"}}, key, 256);
           } catch (error) {
             accountStage = "login-password-derive-" + String(error?.name || "UnknownError").slice(0, 40);
             throw error;
