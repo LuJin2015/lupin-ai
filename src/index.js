@@ -20,7 +20,7 @@ async function sessionUser(request, env) {
   const token=header.startsWith("Bearer ")?header.slice(7):"";
   if (!token || token.length>100) return null;
   const tokenHash=await digest(token);
-  const row=await env.DB.prepare("SELECT users.id, users.username, users.created_at, sessions.token_hash FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(tokenHash,Date.now()).first();
+  const row=await env.DB.prepare("SELECT users.id, users.username, users.created_at, sessions.token_hash FROM lupin_ai_sessions JOIN lupin_ai_users ON lupin_ai_users.id=lupin_ai_sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>?").bind(tokenHash,Date.now()).first();
   return row ? {user:authUser(row),tokenHash} : null;
 }
 
@@ -141,17 +141,17 @@ export default {
           if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return json({error:"Username must be 3–24 characters using letters, numbers, or underscores."},400,origin);
           if (password.length<10 || password.length>128) return json({error:"Password must be 10–128 characters."},400,origin);
           const id=crypto.randomUUID(), salt=randomToken(16), hash=await passwordHash(password,salt), now=Date.now();
-          try { await env.DB.prepare("INSERT INTO users (id,username,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)").bind(id,username,salt,hash,now).run(); }
+          try { await env.DB.prepare("INSERT INTO lupin_ai_users (id,username,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)").bind(id,username,salt,hash,now).run(); }
           catch { return json({error:"That username is already taken."},409,origin); }
           const token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
-          await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,id,expires,now).run();
+          await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,id,expires,now).run();
           return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:now}},201,origin);
         }
         if (url.pathname === "/api/auth/login" && request.method === "POST") {
           let body; try { body=await request.json(); } catch { return json({error:"Enter your username and password."},400,origin); }
           const username=String(body.username||"").trim(), password=String(body.password||"");
           if (!username || !password || password.length>128) return json({error:"Enter your username and password."},400,origin);
-          const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
+          const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
           const hash=row?await passwordHash(password,row.password_salt):await passwordHash(password,"lupin-ai-invalid-user-salt");
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
           const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
@@ -165,7 +165,7 @@ export default {
         }
         if (url.pathname === "/api/auth/logout" && request.method === "POST") {
           const session=await sessionUser(request,env);
-          if (session) await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?").bind(session.tokenHash).run();
+          if (session) await env.DB.prepare("DELETE FROM lupin_ai_sessions WHERE token_hash=?").bind(session.tokenHash).run();
           return json({ok:true},200,origin);
         }
         return json({error:"Unknown account action."},404,origin);
