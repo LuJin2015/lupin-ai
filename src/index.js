@@ -133,32 +133,46 @@ export default {
 
     if (url.pathname.startsWith("/api/auth/")) {
       if (!env.DB) return json({error:"Account database is unavailable."},503,origin);
+      let accountStage = "routing";
       try {
         if (url.pathname === "/api/auth/register" && request.method === "POST") {
+          accountStage = "register-validation";
           let body; try { body=await request.json(); } catch { return json({error:"Enter valid account details."},400,origin); }
           const username=String(body.username||"").trim();
           const password=String(body.password||"");
           if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) return json({error:"Username must be 3–24 characters using letters, numbers, or underscores."},400,origin);
           if (password.length<10 || password.length>128) return json({error:"Password must be 10–128 characters."},400,origin);
+          accountStage = "register-password-hash";
           const id=crypto.randomUUID(), salt=randomToken(16), hash=await passwordHash(password,salt), now=Date.now();
+          accountStage = "register-user-insert";
           try { await env.DB.prepare("INSERT INTO lupin_ai_users (id,username,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)").bind(id,username,salt,hash,now).run(); }
-          catch { return json({error:"That username is already taken."},409,origin); }
+          catch (error) {
+            const existing = await env.DB.prepare("SELECT id FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
+            if (existing) return json({error:"That username is already taken."},409,origin);
+            throw error;
+          }
+          accountStage = "register-session-insert";
           const token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
           await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,id,expires,now).run();
           return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:now}},201,origin);
         }
         if (url.pathname === "/api/auth/login" && request.method === "POST") {
+          accountStage = "login-validation";
           let body; try { body=await request.json(); } catch { return json({error:"Enter your username and password."},400,origin); }
           const username=String(body.username||"").trim(), password=String(body.password||"");
           if (!username || !password || password.length>128) return json({error:"Enter your username and password."},400,origin);
+          accountStage = "login-user-query";
           const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
+          accountStage = "login-password-hash";
           const hash=row?await passwordHash(password,row.password_salt):await passwordHash(password,"lupin-ai-invalid-user-salt");
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
+          accountStage = "login-session-insert";
           const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
           await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,row.id,expires,now).run();
           return json({ok:true,token,expiresAt:expires,user:authUser(row)},200,origin);
         }
         if (url.pathname === "/api/auth/me" && request.method === "GET") {
+          accountStage = "restore-session";
           const session=await sessionUser(request,env);
           if (!session) return json({error:"Please sign in again."},401,origin);
           return json({user:session.user},200,origin);
@@ -170,7 +184,8 @@ export default {
         }
         return json({error:"Unknown account action."},404,origin);
       } catch (error) {
-        return json({error:"Account service failed. Please try again."},500,origin);
+        console.error("Lupin AI account API failure", url.pathname, accountStage, error?.message || error);
+        return json({error:"Account service failed. Please try again.", stage:accountStage},500,origin);
       }
     }
     if (url.pathname === "/api/chats") {
