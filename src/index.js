@@ -163,8 +163,13 @@ export default {
           if (!username || !password || password.length>128) return json({error:"Enter your username and password."},400,origin);
           accountStage = "login-user-query";
           const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
-          accountStage = "login-password-hash";
-          const hash=row?await passwordHash(password,row.password_salt):await passwordHash(password,"lupin-ai-invalid-user-salt");
+          const salt = row ? row.password_salt : "lupin-ai-invalid-user-salt";
+          accountStage = "login-password-import";
+          const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+          accountStage = "login-password-derive";
+          const bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:"SHA-256"}, key, 256);
+          accountStage = "login-password-encode";
+          const hash = b64(bits);
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
           accountStage = "login-session-insert";
           const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
