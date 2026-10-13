@@ -342,7 +342,7 @@ export default {
           const me = await airlineFetch("/me");
           return json({reply:"Booking **"+bookingId+"** has been cancelled. Your current balance is **"+Number(me.miles||0).toLocaleString()+" Lupin Miles**."},200,origin);
         }
-        const bookMatch = latestUserText.match(/\b(?:confirm\s+)?book(?:\s+(?:flight))?\s+(LP\s*\d{3,4})\b/i);
+        const bookMatch = latestUserText.match(/\b(?:confirm\s+)?book(?:ing)?(?:\s+(?:flight))?\s+(LP\s*\d{3,4})\b/i);
         if (bookMatch) {
           const flightCode = bookMatch[1].replace(/\s+/g," ").toUpperCase().replace(/^(LP)\s*/,"$1 ");
           const flightsData = await airlineFetch("/flights");
