@@ -31,7 +31,7 @@
   $("account-switch").addEventListener("click", async () => {
     if (user) {
       try { await request("logout", {method:"POST", body:"{}"}); } catch {}
-      token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser(); showError("You have signed out."); return;
+      token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user:null,token:""}})); showError("You have signed out."); return;
     }
     registering = !registering; showError(""); renderUser();
   });
