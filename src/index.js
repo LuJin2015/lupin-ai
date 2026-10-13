@@ -167,7 +167,13 @@ export default {
           accountStage = "login-password-import";
           const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
           accountStage = "login-password-derive";
-          const bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:"SHA-256"}, key, 256);
+          let bits;
+          try {
+            bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:"SHA-256"}, key, 256);
+          } catch (error) {
+            accountStage = "login-password-derive-" + String(error?.name || "UnknownError").slice(0, 40);
+            throw error;
+          }
           accountStage = "login-password-encode";
           const hash = b64(bits);
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
