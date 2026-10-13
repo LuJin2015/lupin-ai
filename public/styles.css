@@ -23,3 +23,25 @@
 .attachment-details small{font-size:10px;color:var(--muted)}
 .attachment-remove{background:transparent;border:0;color:#aeb5a4;font-size:18px;padding:0 2px}
 @media(max-width:760px){.share-chat{margin-left:auto;margin-right:0;padding:7px 8px;font-size:10px}.topbar{gap:10px}.composer-tools>span{font-size:9px}.composer-hints{gap:7px}.attach-button{padding:7px 8px}}
+
+
+/* v1.6.0 LupinTokens budget */
+.tokens-open{border:1px solid #39432f;background:#1b2016;color:#d6f58a;border-radius:9px;padding:8px 11px;font-size:11px;white-space:nowrap}
+.tokens-open:hover{border-color:var(--lime);background:#242c1b}
+.tokens-backdrop{position:fixed;inset:0;z-index:120;background:#070905d9;display:grid;place-items:center;padding:18px}
+.tokens-backdrop[hidden]{display:none}
+.tokens-dialog{position:relative;width:min(100%,440px);padding:30px;background:#171b13;border:1px solid #3b4531;border-radius:20px;box-shadow:0 30px 100px #0009;color:var(--text)}
+.tokens-dialog h2{font-size:28px;letter-spacing:-1px;margin:12px 0}
+.tokens-subtitle{font-size:12px;color:#a5ab9b;line-height:1.7;margin:0 0 22px}
+.tokens-summary{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
+.tokens-summary>div{padding:13px;background:#20251a;border:1px solid #343d2b;border-radius:12px;display:flex;flex-direction:column;gap:7px}
+.tokens-summary small{font-size:10px;color:#9aa28e}
+.tokens-summary strong{font-size:18px;color:#e5f6c1;overflow-wrap:anywhere}
+.tokens-track{height:9px;background:#30372a;border-radius:99px;overflow:hidden;margin-bottom:23px}
+.tokens-progress{height:100%;width:0;background:var(--lime);border-radius:99px;transition:width .25s ease}
+.tokens-dialog label{display:block;font-size:11px;color:#cdd2c5;margin:15px 0 7px}
+.tokens-dialog input{display:block;width:100%;box-sizing:border-box;padding:12px 13px;background:#10120e;color:var(--text);border:1px solid #394131;border-radius:10px;outline:0;font:inherit;font-size:14px}
+.tokens-dialog input:focus{border-color:var(--lime)}
+.tokens-hint{font-size:10px;color:#858d7b;line-height:1.65}
+.tokens-error{font-size:11px;color:#ff9c8e;min-height:15px;line-height:1.5}
+@media(max-width:760px){.tokens-open{padding:7px 8px;font-size:10px}.topbar{gap:7px}.tokens-dialog{padding:24px}}
