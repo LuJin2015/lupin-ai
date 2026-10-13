@@ -5,10 +5,54 @@
   let pendingFiles=[];
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const HISTORY_URL="https://lupin-ai.lujinsg.workers.dev/api/chats";
+  const TOKENS_URL="https://lupin-ai.lujinsg.workers.dev/api/tokens";
   const CLIENT_KEY="lupin-ai-cloud-client-v1";
   let clientId=localStorage.getItem(CLIENT_KEY);
   if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
   const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
+  const tokensBackdrop=document.querySelector("#tokens-backdrop");
+  let tokenSnapshot={used:0,dailyLimit:10000};
+  function tokenHeaders(){return {"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{})}}
+  function renderTokenSnapshot(data){
+    tokenSnapshot=data;const used=Number(data.used)||0,limit=Number(data.dailyLimit)||10000;
+    const usedEl=document.querySelector("#tokens-used"),limitEl=document.querySelector("#tokens-limit-label"),progress=document.querySelector("#tokens-progress"),inputEl=document.querySelector("#tokens-limit-input");
+    if(usedEl)usedEl.textContent=Math.round(used).toLocaleString()+" tokens";
+    if(limitEl)limitEl.textContent=limit.toLocaleString();
+    if(progress)progress.style.width=Math.min(100,used/Math.max(1,limit)*100)+"%";
+    if(inputEl&&!inputEl.dataset.edited)inputEl.value=String(limit);
+  }
+  async function refreshLupinTokens(){
+    try{
+      const response=await fetch(TOKENS_URL+"?clientId="+encodeURIComponent(clientId),{headers:tokenHeaders()});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error||"Could not load LupinTokens.");
+      renderTokenSnapshot(data);return data;
+    }catch(error){const usedEl=document.querySelector("#tokens-used");if(usedEl)usedEl.textContent="Unavailable";return null}
+  }
+  async function openLupinTokens(){
+    tokensBackdrop.hidden=false;document.querySelector("#tokens-error").textContent="";
+    const inputEl=document.querySelector("#tokens-limit-input");if(inputEl)delete inputEl.dataset.edited;
+    await refreshLupinTokens();inputEl?.focus();
+  }
+  document.querySelector("#tokens-open")?.addEventListener("click",openLupinTokens);
+  document.querySelector("#tokens-close")?.addEventListener("click",()=>tokensBackdrop.hidden=true);
+  tokensBackdrop?.addEventListener("click",event=>{if(event.target===tokensBackdrop)tokensBackdrop.hidden=true});
+  document.querySelector("#tokens-limit-input")?.addEventListener("input",event=>{event.target.dataset.edited="true"});
+  document.querySelector("#tokens-save")?.addEventListener("click",async()=>{
+    const button=document.querySelector("#tokens-save"),errorEl=document.querySelector("#tokens-error"),limit=Number(document.querySelector("#tokens-limit-input").value);
+    errorEl.textContent="";
+    if(!Number.isInteger(limit)||limit<500||limit>100000){errorEl.textContent="Choose a whole number from 500 to 100,000.";return}
+    button.disabled=true;button.textContent="Saving…";
+    try{
+      const response=await fetch(TOKENS_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,dailyLimit:limit})});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error||"Could not save your limit.");
+      delete document.querySelector("#tokens-limit-input").dataset.edited;
+      renderTokenSnapshot(data);notify("LupinTokens limit saved.");
+    }catch(error){errorEl.textContent=error.message||"Could not save your limit."}
+    finally{button.disabled=false;button.textContent="Save limit"}
+  });
+
   async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
   let cloudReady=false;
   async function syncCloudHistory(){
@@ -134,10 +178,10 @@
     welcome.hidden=true;addMessage("user",storedText);history.push({role:"user",content:storedText});saveCurrentChat();input.value="";input.style.height="auto";pendingFiles=[];renderAttachments();
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
-      const response=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:history.slice(-20),attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
+      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,messages:history.slice(-20),attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
-      history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();
+      history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();refreshLupinTokens();
     }catch(error){thinking.remove();history.pop();notify(error.message||"Something went wrong. Try again.")}
     finally{busy=false;send.disabled=false;send.textContent="↑";input.disabled=false;input.focus()}
   }
@@ -149,7 +193,8 @@
   window.addEventListener("popstate",()=>{const id=new URLSearchParams(location.search).get("chat");if(id&&chats.some(c=>c.id===id))openChat(id);else if(!id){activeChatId=null;history.length=0;messages.replaceChildren();welcome.hidden=false;renderChatList()}});
   document.querySelector("#share-chat")?.addEventListener("click",copyChatUrl);
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
-  window.addEventListener("lupin-account-changed",()=>{cloudReady=false;syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});});
+  window.addEventListener("lupin-account-changed",()=>{refreshLupinTokens();cloudReady=false;syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});});
   renderChatList();
+  refreshLupinTokens();
   syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});
 })();
