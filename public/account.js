@@ -31,7 +31,7 @@
   $("account-switch").addEventListener("click", async () => {
     if (user) {
       try { await request("logout", {method:"POST", body:"{}"}); } catch {}
-      token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user:null,token:""}})); showError("You have signed out."); return;
+      token = ""; user = null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem("lupinCloudAccount"); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:null})); renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user:null,token:""}})); showError("You have signed out."); return;
     }
     registering = !registering; showError(""); renderUser();
   });
@@ -41,15 +41,15 @@
     const submit = $("account-submit"); submit.disabled = true; submit.textContent = registering ? "Creating…" : "Signing in…";
     try {
       const data = await request(registering ? "register" : "login", {method:"POST", body:JSON.stringify({username,password})});
-      token = data.token; user = data.user; localStorage.setItem(TOKEN_KEY, token); $("account-password").value = ""; renderUser();
+      token = data.token; user = data.user; localStorage.setItem(TOKEN_KEY, token); localStorage.setItem("lupinCloudAccount", JSON.stringify({token,user,expiresAt:data.expiresAt})); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:{token,user,expiresAt:data.expiresAt}})); $("account-password").value = ""; renderUser();
       hide(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}}));
     } catch (err) { showError(err.message || "Could not sign in."); }
     finally { submit.disabled = false; renderUser(); }
   });
   async function restore() {
     if (!token) { renderUser(); return; }
-    try { const data = await request("me"); user = data.user; renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}})); }
-    catch { token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser(); }
+    try { const data = await request("me"); user = data.user; localStorage.setItem("lupinCloudAccount", JSON.stringify({token,user})); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:{token,user}})); renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}})); }
+    catch { token = ""; user = null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem("lupinCloudAccount"); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:null})); renderUser(); }
   }
   window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:restore };
   restore();
