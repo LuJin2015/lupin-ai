@@ -168,18 +168,10 @@ export default {
           accountStage = "login-user-query";
           const row=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
           const salt = row ? row.password_salt : "lupin-ai-invalid-user-salt";
-          accountStage = "login-password-import";
-          const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-          accountStage = "login-password-derive";
-          let bits;
-          try {
-            bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:{name:"SHA-256"}}, key, 256);
-          } catch (error) {
-            accountStage = "login-password-derive-" + String(error?.name || "UnknownError").slice(0, 40);
-            throw error;
-          }
-          accountStage = "login-password-encode";
-          const hash = b64(bits);
+          accountStage = "login-password-hash";
+          // Match the portable PBKDF2-HMAC-SHA256 implementation used at registration.
+          // The derived key format stays identical, so existing accounts remain valid.
+          const hash = passwordHash(password, salt);
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
           accountStage = "login-session-insert";
           const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
