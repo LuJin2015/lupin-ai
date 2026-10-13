@@ -7,7 +7,7 @@
   let clientId=localStorage.getItem(CLIENT_KEY);
   if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
   const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
-  async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
+  async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
   let cloudReady=false;
   async function syncCloudHistory(){
     try{
