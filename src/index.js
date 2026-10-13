@@ -175,7 +175,8 @@ export default {
     }
     if (url.pathname === "/api/chats") {
       if (!env.DB) return json({ error: "D1 database binding is missing. Check wrangler.toml." }, 503, origin);
-      const clientId = (url.searchParams.get("clientId") || "").slice(0, 80);
+      const accountSession = await sessionUser(request, env);
+      const clientId = accountSession ? accountSession.user.id : (url.searchParams.get("clientId") || "").slice(0, 80);
       if (!/^[a-zA-Z0-9_-]{16,80}$/.test(clientId)) return json({ error: "Invalid client ID." }, 400, origin);
       try {
         if (request.method === "GET") {
