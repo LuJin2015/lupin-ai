@@ -155,7 +155,7 @@ export default {
           const hash=row?await passwordHash(password,row.password_salt):await passwordHash(password,"lupin-ai-invalid-user-salt");
           if (!row || hash!==row.password_hash) return json({error:"Username or password is incorrect."},401,origin);
           const now=Date.now(), token=randomToken(), tokenHash=await digest(token), expires=now+SESSION_DAYS*86400000;
-          await env.DB.prepare("INSERT INTO sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,row.id,expires,now).run();
+          await env.DB.prepare("INSERT INTO lupin_ai_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)").bind(tokenHash,row.id,expires,now).run();
           return json({ok:true,token,expiresAt:expires,user:authUser(row)},200,origin);
         }
         if (url.pathname === "/api/auth/me" && request.method === "GET") {
