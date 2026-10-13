@@ -3,7 +3,8 @@
   const TOKEN_KEY = "lupin-ai-session-v1";
   const $ = id => document.getElementById(id);
   const backdrop = $("account-backdrop"), form = $("account-form"), openBtn = $("account-open");
-  let registering = false, user = null, token = localStorage.getItem(TOKEN_KEY) || (() => { try { return JSON.parse(localStorage.getItem("lupinCloudAccount") || "null")?.token || ""; } catch { return ""; } })();
+  const sharedSession = () => { try { return JSON.parse(localStorage.getItem("lupinCloudAccount") || "null"); } catch { return null; } };
+  let registering = false, user = null, token = sharedSession()?.token || localStorage.getItem(TOKEN_KEY) || "";
   if (token) localStorage.setItem(TOKEN_KEY, token);
   async function request(path, options = {}) {
     const response = await fetch(API + path, { ...options, headers: { "Content-Type": "application/json", ...(token ? {Authorization:"Bearer "+token} : {}), ...(options.headers||{}) } });
@@ -49,8 +50,26 @@
   });
   async function restore() {
     if (!token) { renderUser(); return; }
-    try { const data = await request("me"); user = data.user; localStorage.setItem("lupinCloudAccount", JSON.stringify({token,user})); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:{token,user}})); renderUser(); window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}})); }
-    catch { token = ""; user = null; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem("lupinCloudAccount"); window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:null})); renderUser(); }
+    const storedShared = sharedSession();
+    const isSharedToken = !!storedShared?.token && storedShared.token === token;
+    try {
+      const data = await request("me"); user = data.user;
+      // Never publish an app-only legacy token as a shared Lupin Cloud session.
+      if (isSharedToken) {
+        const session = { ...storedShared, user };
+        localStorage.setItem("lupinCloudAccount", JSON.stringify(session));
+        window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:session}));
+      }
+      renderUser();
+      window.dispatchEvent(new CustomEvent("lupin-account-changed", {detail:{user,token}}));
+    } catch {
+      token = ""; user = null; localStorage.removeItem(TOKEN_KEY);
+      if (isSharedToken) {
+        localStorage.removeItem("lupinCloudAccount");
+        window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:null}));
+      }
+      renderUser();
+    }
   }
   window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:restore };
   restore();
