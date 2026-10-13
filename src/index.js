@@ -48,9 +48,10 @@ function randomToken(bytes=32) { const data=crypto.getRandomValues(new Uint8Arra
 function authUser(row) { return row ? {id:row.id, username:row.username, createdAt:row.created_at} : null; }
 async function cloudHex(text) { const b=await crypto.subtle.digest("SHA-256",encoder.encode(text)); return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join(""); }
 async function cloudPasswordHash(password,salt) {
-  const key=await crypto.subtle.importKey("raw",encoder.encode(password),"PBKDF2",false,["deriveBits"]);
-  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt:encoder.encode(salt),iterations:100000,hash:"SHA-256"},key,256);
-  return [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  // Use the same PBKDF2-HMAC-SHA256 format as Lupin Cloud without relying on
+  // Workers' WebCrypto deriveBits support.
+  const bits=pbkdf2(sha256,encoder.encode(password),encoder.encode(salt),{c:100000,dkLen:32});
+  return [...bits].map(x=>x.toString(16).padStart(2,"0")).join("");
 }
 async function sessionUser(request, env) {
   const header=request.headers.get("Authorization")||"";
