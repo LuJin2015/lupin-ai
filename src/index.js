@@ -1,3 +1,6 @@
+import { pbkdf2 } from "@noble/hashes/pbkdf2";
+import { sha256 } from "@noble/hashes/sha256";
+
 const MODEL = "@cf/qwen/qwen3.8-27b";
 const SYSTEM_PROMPT = `You are Lupin AI, a helpful, friendly, clear AI assistant. Be honest when uncertain and never claim actions you did not perform.
 Write readable Markdown when useful: use **bold** for emphasis, headings for sections, lists for steps, and fenced code blocks for code. Always close Markdown formatting markers; never output unfinished markers such as a bare **.
@@ -8,9 +11,10 @@ const SESSION_DAYS = 30;
 const encoder = new TextEncoder();
 function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,""); }
 async function digest(text) { return b64(await crypto.subtle.digest("SHA-256", encoder.encode(text))); }
-async function passwordHash(password, salt) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt:encoder.encode(salt), iterations:120000, hash:{name:"SHA-256"}}, key, 256);
+function passwordHash(password, salt) {
+  // Use a portable PBKDF2 implementation rather than Workers' unsupported deriveBits path.
+  // This preserves the existing PBKDF2-HMAC-SHA256 format and 120,000 iterations.
+  const bits = pbkdf2(sha256, encoder.encode(password), encoder.encode(salt), { c: 120000, dkLen: 32 });
   return b64(bits);
 }
 function randomToken(bytes=32) { const data=crypto.getRandomValues(new Uint8Array(bytes)); return b64(data); }
