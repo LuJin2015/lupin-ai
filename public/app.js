@@ -178,7 +178,7 @@
     welcome.hidden=true;addMessage("user",storedText);history.push({role:"user",content:storedText});saveCurrentChat();input.value="";input.style.height="auto";pendingFiles=[];renderAttachments();
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
-      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,messages:history.slice(-20),attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
+      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
       history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();refreshLupinTokens();
