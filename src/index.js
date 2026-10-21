@@ -21,10 +21,11 @@ const SESSION_DAYS = 30;
 
 const DEFAULT_LUPIN_TOKEN_LIMIT = 10000;
 const MIN_LUPIN_TOKEN_LIMIT = 500;
-const MAX_LUPIN_TOKEN_LIMIT = 100000;
+const MAX_LUPIN_TOKEN_LIMIT = 10000;
 async function ensureLupinTokenTables(env) {
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_budgets (owner_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_usage (owner_id TEXT NOT NULL, usage_day TEXT NOT NULL, used_tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(owner_id, usage_day))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_credits (owner_id TEXT PRIMARY KEY, tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)").run();
 }
 function getLupinTokenOwner(session, clientId) {
   if (session?.user?.id) return "user:" + session.user.id;
@@ -33,11 +34,12 @@ function getLupinTokenOwner(session, clientId) {
 }
 async function getLupinTokenStatus(env, owner) {
   const day = new Date().toISOString().slice(0,10);
-  const [budget, usage] = await Promise.all([
-    env.DB.prepare("SELECT daily_limit FROM lupin_token_budgets WHERE owner_id=?").bind(owner).first(),
-    env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind(owner,day).first()
+  const [budget, usage, credits] = await Promise.all([
+    env.DB.prepare("SELECT daily_limit FROM lupin_token_budgets WHERE owner_id=?").bind("global:daily").first(),
+    env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind(owner,day).first(),
+    env.DB.prepare("SELECT tokens FROM lupin_token_credits WHERE owner_id=?").bind(owner).first()
   ]);
-  return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,day};
+  return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,credits:Number(credits?.tokens)||0,day};
 }
 async function chargeLupinTokens(env, owner, day, amount) {
   const now=Date.now();
@@ -168,7 +170,7 @@ async function getWebContext(env, prompt) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && url.pathname !== "/api/tokens" && !url.pathname.startsWith("/api/auth/")) return env.ASSETS.fetch(request);
+    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && url.pathname !== "/api/tokens" && url.pathname !== "/api/tokens/purchase" && !url.pathname.startsWith("/api/auth/")) return env.ASSETS.fetch(request);
     const origin = request.headers.get("Origin") || "";
     if (request.method === "OPTIONS") {
       if (origin !== ALLOWED_ORIGIN) return new Response(null, { status: 403 });
@@ -248,16 +250,47 @@ export default {
       try{
         await ensureLupinTokenTables(env);
         if(request.method==="POST"){
+          if(!session?.user || String(session.user.username).toLowerCase()!=="lupin2015") return json({error:"Only the primary Lupin owner can change the daily LupinTokens limit in Control Tower."},403,origin);
           const limit=Number(body.dailyLimit);
-          if(!Number.isInteger(limit)||limit<MIN_LUPIN_TOKEN_LIMIT||limit>MAX_LUPIN_TOKEN_LIMIT)return json({error:"Daily limit must be a whole number from 500 to 100,000."},400,origin);
-          await env.DB.prepare("INSERT INTO lupin_token_budgets (owner_id,daily_limit,updated_at) VALUES (?,?,?) ON CONFLICT(owner_id) DO UPDATE SET daily_limit=excluded.daily_limit,updated_at=excluded.updated_at").bind(owner,limit,Date.now()).run();
+          if(!Number.isInteger(limit)||limit<MIN_LUPIN_TOKEN_LIMIT||limit>MAX_LUPIN_TOKEN_LIMIT)return json({error:"Daily limit must be a whole number from 500 to 10,000."},400,origin);
+          await env.DB.prepare("INSERT INTO lupin_token_budgets (owner_id,daily_limit,updated_at) VALUES (?,?,?) ON CONFLICT(owner_id) DO UPDATE SET daily_limit=excluded.daily_limit,updated_at=excluded.updated_at").bind("global:daily",limit,Date.now()).run();
         }else if(request.method!=="GET"){
-          return json({error:"Use GET to view or POST to update LupinTokens."},405,origin);
+          return json({error:"Use GET to view or POST to update the owner-managed LupinTokens limit."},405,origin);
         }
-        return json(await getLupinTokenStatus(env,owner),200,origin);
+        return json({...await getLupinTokenStatus(env,owner),isOwner:String(session?.user?.username||"").toLowerCase()==="lupin2015"},200,origin);
       }catch(error){
         console.error("LupinTokens API failure",error?.message||error);
         return json({error:"Could not load or save your LupinTokens budget."},500,origin);
+      }
+    }
+    if (url.pathname === "/api/tokens/purchase") {
+      if (request.method !== "POST") return json({error:"Use POST to purchase LupinTokens."},405,origin);
+      if (!env.DB) return json({error:"LupinTokens database is unavailable."},503,origin);
+      const session=await sessionUser(request,env);
+      if(!session?.user?.id) return json({error:"Sign in to Lupin AI before purchasing LupinTokens."},401,origin);
+      let body;try{body=await request.json()}catch{return json({error:"Invalid purchase request."},400,origin)}
+      const airlineToken=String(body.airlineToken||"").slice(0,200);
+      const pack=String(body.pack||"");
+      const packages={"1000":{tokens:1000,miles:100},"5000":{tokens:5000,miles:400}};
+      const chosen=packages[pack];
+      if(!chosen||!airlineToken)return json({error:"Choose a token package and connect Lupin Airlines."},400,origin);
+      try{
+        const base="https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
+        const meResponse=await fetch(base+"/me",{headers:{Authorization:"Bearer "+airlineToken}});
+        const me=await meResponse.json().catch(()=>({}));
+        if(!meResponse.ok)return json({error:"Connect your Lupin Airlines account again before purchasing."},401,origin);
+        if(String(me.username||"").toLowerCase()!==String(session.user.username||"").toLowerCase())return json({error:"Your Lupin AI and Lupin Airlines usernames must match to purchase tokens."},403,origin);
+        if(Number(me.miles||0)<chosen.miles)return json({error:"Not enough Lupin Miles for this package."},400,origin);
+        const debit=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:-chosen.miles})});
+        const debitData=await debit.json().catch(()=>({}));
+        if(!debit.ok)return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
+        const owner="user:"+session.user.id,now=Date.now();
+        await env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,now).run();
+        const status=await getLupinTokenStatus(env,owner);
+        return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,...status},200,origin);
+      }catch(error){
+        console.error("LupinTokens purchase failed",error?.message||error);
+        return json({error:"Purchase could not be completed. Please try again."},503,origin);
       }
     }
     if (url.pathname === "/api/chats") {
@@ -400,8 +433,8 @@ export default {
           tokenLimitStatus=await getLupinTokenStatus(env,tokenOwner);
           tokenEstimate=Math.ceil(messages.reduce((sum,m)=>sum+m.content.length,0)/4)+images.length*768;
           const expectedOutput=Math.min(1200,Math.max(150,Math.ceil(tokenEstimate*0.6)));
-          if(tokenLimitStatus.used+tokenEstimate+expectedOutput>tokenLimitStatus.dailyLimit){
-            return json({error:"You've reached your LupinTokens daily limit. Raise your limit in LupinTokens settings or try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
+          if(tokenLimitStatus.used+tokenEstimate+expectedOutput>tokenLimitStatus.dailyLimit+tokenLimitStatus.credits){
+            return json({error:"You've used your daily LupinTokens allowance and purchased credits. Buy more LupinTokens with Lupin Miles or try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
           }
           tokenDay=tokenLimitStatus.day;
         }
@@ -432,6 +465,9 @@ export default {
       if(tokenOwner){
         const charged=Math.max(1,Math.ceil((messages.reduce((sum,m)=>sum+m.content.length,0)+reply.length)/4)+images.length*768);
         await chargeLupinTokens(env,tokenOwner,tokenDay,charged);
+        const statusBefore=await getLupinTokenStatus(env,tokenOwner);
+        const excess=Math.max(0,statusBefore.used-statusBefore.dailyLimit);
+        if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(charged,Date.now(),tokenOwner).run();
         const updated=await getLupinTokenStatus(env,tokenOwner);
         lupinTokens={...updated,charged};
       }
