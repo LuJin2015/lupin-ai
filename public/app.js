@@ -6,20 +6,21 @@
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const HISTORY_URL="https://lupin-ai.lujinsg.workers.dev/api/chats";
   const TOKENS_URL="https://lupin-ai.lujinsg.workers.dev/api/tokens";
+  const TOKEN_PURCHASE_URL=TOKENS_URL+"/purchase";
   const CLIENT_KEY="lupin-ai-cloud-client-v1";
   let clientId=localStorage.getItem(CLIENT_KEY);
   if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
   const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
   const tokensBackdrop=document.querySelector("#tokens-backdrop");
-  let tokenSnapshot={used:0,dailyLimit:10000};
+  let tokenSnapshot={used:0,dailyLimit:10000,credits:0};
   function tokenHeaders(){return {"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{})}}
   function renderTokenSnapshot(data){
-    tokenSnapshot=data;const used=Number(data.used)||0,limit=Number(data.dailyLimit)||10000;
-    const usedEl=document.querySelector("#tokens-used"),limitEl=document.querySelector("#tokens-limit-label"),progress=document.querySelector("#tokens-progress"),inputEl=document.querySelector("#tokens-limit-input");
+    tokenSnapshot=data;const used=Number(data.used)||0,limit=Number(data.dailyLimit)||10000,credits=Number(data.credits)||0;
+    const usedEl=document.querySelector("#tokens-used"),limitEl=document.querySelector("#tokens-limit-label"),progress=document.querySelector("#tokens-progress"),creditsEl=document.querySelector("#tokens-credits");
     if(usedEl)usedEl.textContent=Math.round(used).toLocaleString()+" tokens";
     if(limitEl)limitEl.textContent=limit.toLocaleString();
+    if(creditsEl)creditsEl.textContent=credits.toLocaleString();
     if(progress)progress.style.width=Math.min(100,used/Math.max(1,limit)*100)+"%";
-    if(inputEl&&!inputEl.dataset.edited)inputEl.value=String(limit);
   }
   async function refreshLupinTokens(){
     try{
@@ -31,27 +32,27 @@
   }
   async function openLupinTokens(){
     tokensBackdrop.hidden=false;document.querySelector("#tokens-error").textContent="";
-    const inputEl=document.querySelector("#tokens-limit-input");if(inputEl)delete inputEl.dataset.edited;
-    await refreshLupinTokens();inputEl?.focus();
+    await refreshLupinTokens();
   }
   document.querySelector("#tokens-open")?.addEventListener("click",openLupinTokens);
   document.querySelector("#tokens-close")?.addEventListener("click",()=>tokensBackdrop.hidden=true);
   tokensBackdrop?.addEventListener("click",event=>{if(event.target===tokensBackdrop)tokensBackdrop.hidden=true});
-  document.querySelector("#tokens-limit-input")?.addEventListener("input",event=>{event.target.dataset.edited="true"});
-  document.querySelector("#tokens-save")?.addEventListener("click",async()=>{
-    const button=document.querySelector("#tokens-save"),errorEl=document.querySelector("#tokens-error"),limit=Number(document.querySelector("#tokens-limit-input").value);
-    errorEl.textContent="";
-    if(!Number.isInteger(limit)||limit<500||limit>100000){errorEl.textContent="Choose a whole number from 500 to 100,000.";return}
-    button.disabled=true;button.textContent="Saving…";
+  async function purchaseLupinTokens(pack,button){
+    const errorEl=document.querySelector("#tokens-error");errorEl.textContent="";
+    const airlineToken=window.LupinAirline?.token;
+    if(!window.LupinAccount?.token){errorEl.textContent="Sign in to Lupin AI first.";return}
+    if(!airlineToken){errorEl.textContent="Connect your Lupin Airlines account first using Connect airline.";return}
+    button.disabled=true;const original=button.textContent;button.textContent="Purchasing…";
     try{
-      const response=await fetch(TOKENS_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,dailyLimit:limit})});
+      const response=await fetch(TOKEN_PURCHASE_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({pack,airlineToken})});
       const data=await response.json().catch(()=>({}));
-      if(!response.ok)throw new Error(data.error||"Could not save your limit.");
-      delete document.querySelector("#tokens-limit-input").dataset.edited;
-      renderTokenSnapshot(data);notify("LupinTokens limit saved.");
-    }catch(error){errorEl.textContent=error.message||"Could not save your limit."}
-    finally{button.disabled=false;button.textContent="Save limit"}
-  });
+      if(!response.ok)throw new Error(data.error||"Purchase failed.");
+      renderTokenSnapshot(data);notify("Purchased "+Number(data.purchased).toLocaleString()+" LupinTokens for "+Number(data.milesSpent).toLocaleString()+" Lupin Miles.");
+    }catch(error){errorEl.textContent=error.message||"Purchase failed."}
+    finally{button.disabled=false;button.textContent=original}
+  }
+  document.querySelector("#tokens-buy-1000")?.addEventListener("click",event=>purchaseLupinTokens("1000",event.currentTarget));
+  document.querySelector("#tokens-buy-5000")?.addEventListener("click",event=>purchaseLupinTokens("5000",event.currentTarget));
 
   async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
   let cloudReady=false;
