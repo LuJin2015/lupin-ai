@@ -467,7 +467,7 @@ export default {
         await chargeLupinTokens(env,tokenOwner,tokenDay,charged);
         const statusBefore=await getLupinTokenStatus(env,tokenOwner);
         const excess=Math.max(0,statusBefore.used-statusBefore.dailyLimit);
-        if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(charged,Date.now(),tokenOwner).run();
+        if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(charged,excess),Date.now(),tokenOwner).run();
         const updated=await getLupinTokenStatus(env,tokenOwner);
         lupinTokens={...updated,charged};
       }
