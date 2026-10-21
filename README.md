@@ -25,3 +25,14 @@ npm run dev
 Default: [@cf/qwen/qwen3.8-27b](https://developers.cloudflare.com/workers-ai/models/qwen3.8-27b/), called using `env.AI.run()`.
 
 Never commit or share your Cloudflare API token.
+
+## Credits
+
+**Project Lead:** Lu Jin
+
+**AI Development Assistant:** ChatGPT by OpenAI
+
+ChatGPT assisted with coding, debugging, documentation, and design. The Lupin projects were developed through human direction and AI assistance.
+
+Intellectual property rights remain subject to applicable law and the rights of the respective contributors and third-party authors.
+
