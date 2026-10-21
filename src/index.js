@@ -277,6 +277,7 @@ export default {
       const chosen=packages[pack];
       if(!chosen||!airlineToken)return json({error:"Choose a token package and connect Lupin Airlines."},400,origin);
       try{
+        await ensureLupinTokenTables(env);
         const base="https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
         const meResponse=await fetch(base+"/me",{headers:{Authorization:"Bearer "+airlineToken}});
         const me=await meResponse.json().catch(()=>({}));
@@ -287,7 +288,12 @@ export default {
         const debitData=await debit.json().catch(()=>({}));
         if(!debit.ok)return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
         const owner="user:"+session.user.id,now=Date.now();
-        await env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,now).run();
+        try{
+          await env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,now).run();
+        }catch(creditError){
+          try{await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:chosen.miles})})}catch{}
+          throw creditError;
+        }
         const status=await getLupinTokenStatus(env,owner);
         return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,...status},200,origin);
       }catch(error){
