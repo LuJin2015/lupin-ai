@@ -20,6 +20,7 @@ const MAX_BODY = 16000;
 const SESSION_DAYS = 30;
 
 const DEFAULT_LUPIN_TOKEN_LIMIT = 10000;
+const HARD_GLOBAL_DAILY_TOKEN_CAP = 25000;
 const MIN_LUPIN_TOKEN_LIMIT = 500;
 const MAX_LUPIN_TOKEN_LIMIT = 10000;
 async function ensureLupinTokenTables(env) {
@@ -34,12 +35,13 @@ function getLupinTokenOwner(session, clientId) {
 }
 async function getLupinTokenStatus(env, owner) {
   const day = new Date().toISOString().slice(0,10);
-  const [budget, usage, credits] = await Promise.all([
+  const [budget, usage, credits, globalUsage] = await Promise.all([
     env.DB.prepare("SELECT daily_limit FROM lupin_token_budgets WHERE owner_id=?").bind("global:daily").first(),
     env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind(owner,day).first(),
-    env.DB.prepare("SELECT tokens FROM lupin_token_credits WHERE owner_id=?").bind(owner).first()
+    env.DB.prepare("SELECT tokens FROM lupin_token_credits WHERE owner_id=?").bind(owner).first(),
+    env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind("global:usage",day).first()
   ]);
-  return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,credits:Number(credits?.tokens)||0,day};
+  return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,credits:Number(credits?.tokens)||0,globalUsed:Number(globalUsage?.used_tokens)||0,globalLimit:HARD_GLOBAL_DAILY_TOKEN_CAP,day};
 }
 async function chargeLupinTokens(env, owner, day, amount) {
   const now=Date.now();
@@ -433,6 +435,9 @@ export default {
           tokenLimitStatus=await getLupinTokenStatus(env,tokenOwner);
           tokenEstimate=Math.ceil(messages.reduce((sum,m)=>sum+m.content.length,0)/4)+images.length*768;
           const expectedOutput=Math.min(1200,Math.max(150,Math.ceil(tokenEstimate*0.6)));
+          if(tokenLimitStatus.globalUsed+tokenEstimate+expectedOutput>tokenLimitStatus.globalLimit){
+            return json({error:"Lupin AI has reached its shared daily safety cap. This protects the Cloudflare AI budget for everyone; try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
+          }
           if(tokenLimitStatus.used+tokenEstimate+expectedOutput>tokenLimitStatus.dailyLimit+tokenLimitStatus.credits){
             return json({error:"You've used your daily LupinTokens allowance and purchased credits. Buy more LupinTokens with Lupin Miles or try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
           }
@@ -465,6 +470,7 @@ export default {
       if(tokenOwner){
         const charged=Math.max(1,Math.ceil((messages.reduce((sum,m)=>sum+m.content.length,0)+reply.length)/4)+images.length*768);
         await chargeLupinTokens(env,tokenOwner,tokenDay,charged);
+        await chargeLupinTokens(env,"global:usage",tokenDay,charged);
         const statusBefore=await getLupinTokenStatus(env,tokenOwner);
         const excess=Math.max(0,statusBefore.used-statusBefore.dailyLimit);
         if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(charged,excess),Date.now(),tokenOwner).run();
