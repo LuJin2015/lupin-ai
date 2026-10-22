@@ -26,13 +26,13 @@ Default: [@cf/qwen/qwen3.8-27b](https://developers.cloudflare.com/workers-ai/mod
 
 Never commit or share your Cloudflare API token.
 
-## Credits
+## Credits and model origins
 
-**Project Lead:** Lu Jin
+**Underlying model family:** Qwen, associated with Alibaba's Tongyi Lab. Lupin AI currently calls the Cloudflare Workers AI model `@cf/qwen/qwen3.8-27b`. This credits the underlying model technology and does not mean Alibaba created the Lupin AI application.
 
-**AI Development Assistant:** ChatGPT by OpenAI
+**Lupin AI project lead and improver:** Lu Jin — developed, customized, and improved the Lupin AI application and its Lupin-specific integrations.
 
-ChatGPT assisted with coding, debugging, documentation, and design. The Lupin projects were developed through human direction and AI assistance.
+**AI development assistant:** ChatGPT by OpenAI — assisted with coding, debugging, documentation, and design.
 
-Intellectual property rights remain subject to applicable law and the rights of the respective contributors and third-party authors.
+The application, the underlying model, and third-party components have distinct origins and may be subject to different licenses and rights. Consult the relevant model and provider documentation for applicable terms.
 
