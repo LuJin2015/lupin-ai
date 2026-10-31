@@ -301,6 +301,97 @@ export default {
         return json({error:"Purchase could not be completed. Please try again."},503,origin);
       }
     }
+
+    // OpenAI-compatible API keys are scoped to a signed-in Lupin Cloud account.
+    if (url.pathname === "/api/keys" || url.pathname.startsWith("/api/keys/")) {
+      if (!env.DB) return json({error:"API key database is unavailable."},503,origin);
+      const session=await sessionUser(request,env);
+      if(!session?.user?.id) return json({error:"Sign in to Lupin AI to manage API keys."},401,origin);
+      try {
+        await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_api_keys (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT)").run();
+        if(url.pathname==="/api/keys" && request.method==="GET") {
+          const rows=await env.DB.prepare("SELECT id,key_prefix,name,created_at,last_used_at FROM lupin_api_keys WHERE owner_id=? AND revoked_at IS NULL ORDER BY created_at DESC").bind(session.user.id).all();
+          return json({keys:rows.results||[]},200,origin);
+        }
+        if(url.pathname==="/api/keys" && request.method==="POST") {
+          let body;try{body=await request.json()}catch{return json({error:"Enter a valid key name."},400,origin)}
+          const name=String(body.name||"").trim().replace(/[<>]/g,"").slice(0,48)||"New API key";
+          const count=await env.DB.prepare("SELECT COUNT(*) AS total FROM lupin_api_keys WHERE owner_id=? AND revoked_at IS NULL").bind(session.user.id).first();
+          if(Number(count?.total||0)>=10)return json({error:"You can have up to 10 active API keys. Revoke one before creating another."},409,origin);
+          const secret="sk-lupin-"+randomToken(32);
+          const id=crypto.randomUUID(),created=new Date().toISOString(),hash=await cloudHex(secret);
+          await env.DB.prepare("INSERT INTO lupin_api_keys(id,owner_id,key_hash,key_prefix,name,created_at) VALUES(?,?,?,?,?,?)").bind(id,session.user.id,hash,secret.slice(0,18)+"…",name,created).run();
+          return json({ok:true,key:secret,apiKey:{id,name,keyPrefix:secret.slice(0,18)+"…",createdAt:created}},201,origin);
+        }
+        const match=url.pathname.match(/^\/api\/keys\/([a-f0-9-]{36})$/i);
+        if(match && request.method==="DELETE") {
+          const result=await env.DB.prepare("UPDATE lupin_api_keys SET revoked_at=? WHERE id=? AND owner_id=? AND revoked_at IS NULL").bind(new Date().toISOString(),match[1],session.user.id).run();
+          if(!result.meta?.changes)return json({error:"API key not found or already revoked."},404,origin);
+          return json({ok:true},200,origin);
+        }
+        return json({error:"Use GET or POST on /api/keys, or DELETE /api/keys/{id}."},405,origin);
+      } catch(error) {
+        console.error("Lupin API key management failed",error?.message||error);
+        return json({error:"Could not manage API keys. Please try again."},500,origin);
+      }
+    }
+
+    // OpenAI-compatible endpoints. API keys are accepted only here, not as web-session credentials.
+    if (url.pathname==="/v1/models" || url.pathname==="/v1/chat/completions") {
+      if (!env.DB || !env.AI) return json({error:{message:"Lupin AI service is unavailable.",type:"server_error"}},503,origin);
+      const auth=request.headers.get("Authorization")||"";
+      const apiKey=auth.startsWith("Bearer ")?auth.slice(7):"";
+      if(!apiKey.startsWith("sk-lupin-") || apiKey.length>200) return json({error:{message:"Invalid or missing Lupin API key.",type:"authentication_error",code:"invalid_api_key"}},401,origin);
+      try {
+        await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_api_keys (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT)").run();
+        const keyRow=await env.DB.prepare("SELECT id,owner_id FROM lupin_api_keys WHERE key_hash=? AND revoked_at IS NULL").bind(await cloudHex(apiKey)).first();
+        if(!keyRow)return json({error:{message:"Invalid or revoked Lupin API key.",type:"authentication_error",code:"invalid_api_key"}},401,origin);
+        await env.DB.prepare("UPDATE lupin_api_keys SET last_used_at=? WHERE id=?").bind(new Date().toISOString(),keyRow.id).run();
+        if(url.pathname==="/v1/models") {
+          if(request.method!=="GET")return json({error:{message:"Use GET for this endpoint.",type:"invalid_request_error"}},405,origin);
+          return json({object:"list",data:[{id:"lupin-ai",object:"model",created:0,owned_by:"lupin"},{id:"qwen3.8-27b",object:"model",created:0,owned_by:"lupin"}]},200,origin);
+        }
+        if(request.method!=="POST")return json({error:{message:"Use POST for chat completions.",type:"invalid_request_error"}},405,origin);
+        let body;try{body=await request.json()}catch{return json({error:{message:"Request body must be valid JSON.",type:"invalid_request_error"}},400,origin)}
+        if(body.stream===true)return json({error:{message:"Streaming is not supported yet. Set stream to false.",type:"invalid_request_error",param:"stream",code:"unsupported_value"}},400,origin);
+        if(!Array.isArray(body.messages)||!body.messages.length||body.messages.length>40)return json({error:{message:"messages must be a non-empty array of at most 40 items.",type:"invalid_request_error",param:"messages"}},400,origin);
+        const messages=body.messages.slice(-20).map(m=>({role:["system","user","assistant"].includes(m?.role)?m.role:"user",content:String(m?.content??"").slice(0,6000)}));
+        if(!messages.some(m=>m.role==="user"&&m.content.trim()))return json({error:{message:"At least one non-empty user message is required.",type:"invalid_request_error"}},400,origin);
+        const owner="user:"+keyRow.owner_id,day=new Date().toISOString().slice(0,10);
+        await ensureLupinTokenTables(env);
+        const status=await getLupinTokenStatus(env,owner);
+        const inputEstimate=Math.ceil(messages.reduce((n,m)=>n+m.content.length,0)/4);
+        const outputLimit=Math.min(1200,Math.max(150,Number(body.max_tokens)||700));
+        if(status.globalUsed+inputEstimate+outputLimit>status.globalLimit)return json({error:{message:"Lupin AI has reached its shared daily safety cap. Try again after the daily reset.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
+        if(status.used+inputEstimate+outputLimit>status.dailyLimit+status.credits)return json({error:{message:"Your LupinTokens allowance is exhausted. Try again after the daily reset or purchase more LupinTokens.",type:"rate_limit_error",code:"lupin_tokens_limit"}},429,origin);
+        const reservation=inputEstimate+outputLimit;
+        const reserved=await env.DB.prepare("INSERT INTO lupin_token_usage (owner_id,usage_day,used_tokens,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,usage_day) DO UPDATE SET used_tokens=used_tokens+excluded.used_tokens,updated_at=excluded.updated_at WHERE lupin_token_usage.used_tokens+excluded.used_tokens<=?").bind("global:usage",day,reservation,Date.now(),HARD_GLOBAL_DAILY_TOKEN_CAP).run();
+        if(!reserved.meta?.changes)return json({error:{message:"Lupin AI has reached its shared daily safety cap.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
+        try {
+          const model=String(body.model||"lupin-ai");
+          if(!["lupin-ai","qwen3.8-27b"].includes(model)){
+            await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();
+            return json({error:{message:"Model not found. Available models: lupin-ai, qwen3.8-27b.",type:"invalid_request_error",param:"model",code:"model_not_found"}},404,origin);
+          }
+          const result=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7});
+          const reply=result?.response??result?.result?.response??result?.choices?.[0]?.message?.content;
+          if(typeof reply!=="string"||!reply.trim())throw new Error("The model returned an empty response.");
+          const completionTokens=Math.max(1,Math.ceil(reply.length/4)),promptTokens=inputEstimate,totalTokens=inputEstimate+completionTokens;
+          await chargeLupinTokens(env,owner,day,totalTokens);
+          await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MIN(?,MAX(0,used_tokens+?-?)),updated_at=? WHERE owner_id=? AND usage_day=?").bind(HARD_GLOBAL_DAILY_TOKEN_CAP,totalTokens,reservation,Date.now(),"global:usage",day).run();
+          const now=Math.floor(Date.now()/1000);
+          return json({id:"chatcmpl-"+crypto.randomUUID().replace(/-/g,""),object:"chat.completion",created:now,model:"lupin-ai",choices:[{index:0,message:{role:"assistant",content:reply},finish_reason:"stop"}],usage:{prompt_tokens:promptTokens,completion_tokens:completionTokens,total_tokens:totalTokens}},200,origin);
+        } catch(error) {
+          await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();
+          console.error("OpenAI-compatible completion failed",error?.message||error);
+          return json({error:{message:"Cloudflare Workers AI could not complete the request.",type:"server_error"}},502,origin);
+        }
+      } catch(error) {
+        console.error("OpenAI-compatible API failure",error?.message||error);
+        return json({error:{message:"API request could not be completed.",type:"server_error"}},500,origin);
+      }
+    }
+
     if (url.pathname === "/api/chats") {
       if (!env.DB) return json({ error: "D1 database binding is missing. Check wrangler.toml." }, 503, origin);
       const accountSession = await sessionUser(request, env);
