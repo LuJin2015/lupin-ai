@@ -405,6 +405,12 @@ export default {
         }
         const debitData=await debit.json().catch(()=>({}));
         if(!debit.ok){
+          if(debit.status>=500){
+            const requestId=crypto.randomUUID();
+            await env.DB.prepare("UPDATE lupin_token_purchases SET status='unknown',request_id=?,updated_at=? WHERE purchase_id=? AND owner_id=?").bind(requestId,Date.now(),purchaseId,owner).run();
+            console.error("LupinTokens mileage debit returned an uncertain server error",JSON.stringify({requestId,status:debit.status,message:String(debitData.error||"mileage service error")}));
+            return json({error:"The mileage service returned a server error, so the debit outcome is uncertain. Do not retry yet. Check both balances and contact the Lupin owner with reference "+requestId+".",requestId},503,origin);
+          }
           await env.DB.prepare("UPDATE lupin_token_purchases SET status='rejected',updated_at=? WHERE purchase_id=? AND owner_id=?").bind(Date.now(),purchaseId,owner).run();
           return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added.",retryable:true},400,origin);
         }
