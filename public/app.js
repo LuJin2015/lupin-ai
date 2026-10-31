@@ -63,7 +63,7 @@
     if(!window.LupinAccount?.token){apiKeysList.textContent="Sign in to Lupin AI to create and manage API keys.";return}
     apiKeysList.textContent="Loading keys…";apiKeysError.textContent="";
     try{
-      const response=await fetch("/api/keys",{headers:apiKeyHeaders()});const data=await response.json().catch(()=>({}));
+      const response=await fetch("https://lupin-ai.lujinsg.workers.dev/api/keys",{headers:apiKeyHeaders()});const data=await response.json().catch(()=>({}));
       if(!response.ok)throw new Error(data.error||"Could not load API keys.");
       apiKeysList.replaceChildren();
       if(!data.keys?.length){apiKeysList.textContent="No active API keys yet.";return}
@@ -74,7 +74,7 @@
         const meta=document.createElement("small");meta.textContent=key.key_prefix+" · created "+new Date(key.created_at).toLocaleDateString()+(key.last_used_at?" · used "+new Date(key.last_used_at).toLocaleDateString():" · never used");
         details.append(name,meta);
         const revoke=document.createElement("button");revoke.type="button";revoke.className="api-key-revoke";revoke.textContent="Revoke";
-        revoke.addEventListener("click",async()=>{if(!confirm("Revoke this API key? Apps using it will stop working."))return;revoke.disabled=true;try{const res=await fetch("/api/keys/"+encodeURIComponent(key.id),{method:"DELETE",headers:apiKeyHeaders()});const result=await res.json().catch(()=>({}));if(!res.ok)throw new Error(result.error||"Could not revoke key.");await loadApiKeys()}catch(error){apiKeysError.textContent=error.message;revoke.disabled=false}});
+        revoke.addEventListener("click",async()=>{if(!confirm("Revoke this API key? Apps using it will stop working."))return;revoke.disabled=true;try{const res=await fetch("https://lupin-ai.lujinsg.workers.dev/api/keys/"+encodeURIComponent(key.id),{method:"DELETE",headers:apiKeyHeaders()});const result=await res.json().catch(()=>({}));if(!res.ok)throw new Error(result.error||"Could not revoke key.");await loadApiKeys()}catch(error){apiKeysError.textContent=error.message;revoke.disabled=false}});
         row.append(details,revoke);apiKeysList.append(row);
       });
     }catch(error){apiKeysList.textContent="";apiKeysError.textContent=error.message||"Could not load API keys."}
@@ -87,7 +87,7 @@
     if(!window.LupinAccount?.token){apiKeysError.textContent="Sign in to Lupin AI first.";return}
     const button=event.currentTarget.querySelector("button[type=submit]");button.disabled=true;
     try{
-      const response=await fetch("/api/keys",{method:"POST",headers:apiKeyHeaders(),body:JSON.stringify({name:document.querySelector("#api-key-name").value})});
+      const response=await fetch("https://lupin-ai.lujinsg.workers.dev/api/keys",{method:"POST",headers:apiKeyHeaders(),body:JSON.stringify({name:document.querySelector("#api-key-name").value})});
       const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Could not create API key.");
       const box=document.querySelector("#api-key-created");box.hidden=false;box.replaceChildren();
       const warning=document.createElement("p");warning.textContent="Copy this key now. It will not be shown again.";const code=document.createElement("code");code.textContent=data.key;code.style.display="block";code.style.overflowWrap="anywhere";code.style.padding="12px";code.style.margin="8px 0";code.style.background="rgba(128,128,128,.12)";const copy=document.createElement("button");copy.type="button";copy.className="account-submit";copy.textContent="Copy key";copy.addEventListener("click",async()=>{try{await navigator.clipboard.writeText(data.key);copy.textContent="Copied!"}catch{apiKeysError.textContent="Clipboard unavailable. Select and copy the key above."}});
