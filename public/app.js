@@ -102,21 +102,38 @@
     try{
       const data=await cloudRequest(cloudUrl());
       const cloudChats=Array.isArray(data.chats)?data.chats:[];
-      if(!cloudChats.length&&chats.length){
-        for(const chat of chats) await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})});
-      }else if(cloudChats.length){
-        const merged=new Map(chats.map(chat=>[chat.id,chat]));
-        cloudChats.forEach(chat=>merged.set(chat.id,chat));
-        chats=Array.from(merged.values()).sort((a,b)=>(b.updated||0)-(a.updated||0)).slice(0,50);
-        saveChats();
+      const cloudById=new Map(cloudChats.filter(chat=>chat&&typeof chat.id==="string"&&Array.isArray(chat.messages)).map(chat=>[chat.id,chat]));
+      const localById=new Map(chats.map(chat=>[chat.id,chat]));
+      const merged=new Map(localById);
+      const uploads=[];
+      for(const cloudChat of cloudById.values()){
+        const local=localById.get(cloudChat.id);
+        if(!local||Number(cloudChat.updated||0)>=Number(local.updated||0))merged.set(cloudChat.id,cloudChat);
+      }
+      for(const local of localById.values()){
+        const remote=cloudById.get(local.id);
+        if(!remote||Number(local.updated||0)>Number(remote.updated||0))uploads.push(local);
+      }
+      chats=Array.from(merged.values()).sort((a,b)=>(Number(b.updated)||0)-(Number(a.updated)||0)).slice(0,50);
+      saveChats();
+      for(const chat of uploads){
+        await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})});
       }
       cloudReady=true;renderChatList();
-    }catch(error){notify("Cloud history unavailable; this chat stays saved on this device.")}
+    }catch(error){cloudReady=false;notify("Cloud history unavailable; your local copy is kept on this device.")}
   }
   const history=[]; let busy=false, toastTimer;
   const STORAGE_KEY="lupin-ai-chat-history-v1";
   let chats=loadChats(), activeChatId=new URLSearchParams(location.search).get("chat");
-  function loadChats(){try{const v=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");return Array.isArray(v)?v:[]}catch{return []}}
+  function loadChats(){
+    try{
+      const value=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");
+      if(!Array.isArray(value))return [];
+      return value.filter(chat=>chat&&typeof chat.id==="string"&&/^[a-zA-Z0-9_-]{1,80}$/.test(chat.id)&&Array.isArray(chat.messages))
+        .map(chat=>({...chat,title:String(chat.title||"Untitled chat").slice(0,120),updated:Number(chat.updated)||0,messages:chat.messages.filter(m=>m&&["user","assistant"].includes(m.role)&&typeof m.content==="string").slice(-100).map(m=>({role:m.role,content:m.content.slice(0,6000)}))}))
+        .slice(0,50);
+    }catch{return []}
+  }
   function saveChats(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(chats.slice(0,50)))}catch{notify("Chat history could not be saved in this browser.")}}
   function newId(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8)}
   function currentChat(){return chats.find(chat=>chat.id===activeChatId)}
