@@ -49,7 +49,12 @@
     finally { submit.disabled = false; renderUser(); }
   });
   async function restore() {
-    if (!token) { renderUser(); return; }
+    if (!token) {
+      const hadUser=!!user;
+      user=null;renderUser();
+      if(hadUser)window.dispatchEvent(new CustomEvent("lupin-account-changed",{detail:{user:null,token:""}}));
+      return;
+    }
     const storedShared = sharedSession();
     const isSharedToken = !!storedShared?.token && storedShared.token === token;
     try {
@@ -71,22 +76,27 @@
         window.dispatchEvent(new CustomEvent("lupin-auth-change", {detail:null}));
       }
       renderUser();
+      window.dispatchEvent(new CustomEvent("lupin-account-changed",{detail:{user:null,token:""}}));
     }
   }
   window.addEventListener("storage", event => {
     if (event.key !== "lupinCloudAccount") return;
-    const shared = sharedSession();
-    token = shared?.token || "";
+    const shared = sharedSession(),nextToken=shared?.token||"";
+    const changed=nextToken!==token;
+    token=nextToken;
     if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
+    if(changed){user=null;renderUser();window.dispatchEvent(new CustomEvent("lupin-account-changed",{detail:{user:null,token:token||""}}));}
     window.LupinAccount.ready=restore();
   });
   window.addEventListener("lupin-auth-change", event => {
     if (event.detail?.token && event.detail.token !== token) {
-      token = event.detail.token;
+      token = event.detail.token;user=null;renderUser();
       localStorage.setItem(TOKEN_KEY, token);
+      window.dispatchEvent(new CustomEvent("lupin-account-changed",{detail:{user:null,token}}));
       window.LupinAccount.ready=restore();
     } else if (!event.detail?.token && token) {
       token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser();
+      window.dispatchEvent(new CustomEvent("lupin-account-changed",{detail:{user:null,token:""}}));
     }
   });
   window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:()=>{window.LupinAccount.ready=restore();return window.LupinAccount.ready;}, currentUser:sharedSession, ready:Promise.resolve() };
