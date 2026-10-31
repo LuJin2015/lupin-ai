@@ -31,7 +31,10 @@ async function ensureLupinTokenTables(env) {
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_budgets (owner_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_usage (owner_id TEXT NOT NULL, usage_day TEXT NOT NULL, used_tokens INTEGER NOT NULL DEFAULT 0, reserved_tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(owner_id, usage_day))").run();
   const usageColumns=await env.DB.prepare("PRAGMA table_info(lupin_token_usage)").all();
-  if(!(usageColumns.results||[]).some(column=>column.name==="reserved_tokens"))await env.DB.prepare("ALTER TABLE lupin_token_usage ADD COLUMN reserved_tokens INTEGER NOT NULL DEFAULT 0").run();
+  if(!(usageColumns.results||[]).some(column=>column.name==="reserved_tokens")){
+    try{await env.DB.prepare("ALTER TABLE lupin_token_usage ADD COLUMN reserved_tokens INTEGER NOT NULL DEFAULT 0").run();}
+    catch(error){if(!/duplicate column name: reserved_tokens/i.test(String(error?.message||error)))throw error;}
+  }
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_credits (owner_id TEXT PRIMARY KEY, tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_purchases (purchase_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, pack TEXT NOT NULL, tokens INTEGER NOT NULL, miles_spent INTEGER NOT NULL, status TEXT NOT NULL, request_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
 }
