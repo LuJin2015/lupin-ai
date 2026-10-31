@@ -353,7 +353,6 @@ export default {
         }
         if(request.method!=="POST")return json({error:{message:"Use POST for chat completions.",type:"invalid_request_error"}},405,origin);
         let body;try{body=await request.json()}catch{return json({error:{message:"Request body must be valid JSON.",type:"invalid_request_error"}},400,origin)}
-        if(body.stream===true)return json({error:{message:"Streaming is not supported yet. Set stream to false.",type:"invalid_request_error",param:"stream",code:"unsupported_value"}},400,origin);
         if(!Array.isArray(body.messages)||!body.messages.length||body.messages.length>40)return json({error:{message:"messages must be a non-empty array of at most 40 items.",type:"invalid_request_error",param:"messages"}},400,origin);
         const messages=body.messages.slice(-20).map(m=>({role:["system","user","assistant"].includes(m?.role)?m.role:"user",content:String(m?.content??"").slice(0,6000)}));
         if(!messages.some(m=>m.role==="user"&&m.content.trim()))return json({error:{message:"At least one non-empty user message is required.",type:"invalid_request_error"}},400,origin);
@@ -372,6 +371,74 @@ export default {
           if(!["lupin-ai","qwen3.8-27b"].includes(model)){
             await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();
             return json({error:{message:"Model not found. Available models: lupin-ai, qwen3.8-27b.",type:"invalid_request_error",param:"model",code:"model_not_found"}},404,origin);
+          }
+          if(body.stream===true){
+            const streamResult=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7,stream:true});
+            if(!streamResult || typeof streamResult.getReader!=="function")throw new Error("The model did not return a readable stream.");
+            const reader=streamResult.getReader();
+            const completionId="chatcmpl-"+crypto.randomUUID().replace(/-/g,""),created=Math.floor(Date.now()/1000);
+            const streamHeaders={"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no","Vary":"Origin"};
+            if(origin===ALLOWED_ORIGIN){streamHeaders["Access-Control-Allow-Origin"]=ALLOWED_ORIGIN;streamHeaders["Access-Control-Allow-Methods"]="GET, POST, DELETE, OPTIONS";streamHeaders["Access-Control-Allow-Headers"]="Content-Type, Authorization";}
+            let settled=false;
+            const releaseReservation=async()=>{if(!settled){settled=true;await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();}};
+            const stream=new ReadableStream({
+              async start(controller){
+                const send=(payload)=>controller.enqueue(encoder.encode("data: "+JSON.stringify(payload)+"\\n\\n"));
+                const base={id:completionId,object:"chat.completion.chunk",created,model};
+                let buffer="",fullReply="",finished=false;
+                try{
+                  send({...base,choices:[{index:0,delta:{role:"assistant"},finish_reason:null}]});
+                  const decoder=new TextDecoder();
+                  while(true){
+                    const part=await reader.read();
+                    if(part.done)break;
+                    buffer+=decoder.decode(part.value,{stream:true});
+                    const events=buffer.split(/\\r?\\n\\r?\\n/);
+                    buffer=events.pop()||"";
+                    for(const event of events){
+                      for(const line of event.split(/\\r?\\n/)){
+                        if(!line.startsWith("data:"))continue;
+                        const raw=line.slice(5).trim();
+                        if(!raw||raw==="[DONE]")continue;
+                        let item;try{item=JSON.parse(raw)}catch{continue}
+                        const delta=typeof item.response==="string"?item.response:(typeof item.token==="string"?item.token:(typeof item.choices?.[0]?.delta?.content==="string"?item.choices[0].delta.content:""));
+                        if(delta){fullReply+=delta;send({...base,choices:[{index:0,delta:{content:delta},finish_reason:null}]});}
+                      }
+                    }
+                  }
+                  buffer+=decoder.decode();
+                  if(buffer.trim()){
+                    for(const line of buffer.split(/\\r?\\n/)){
+                      if(!line.startsWith("data:"))continue;
+                      const raw=line.slice(5).trim();if(!raw||raw==="[DONE]")continue;
+                      try{const item=JSON.parse(raw);const delta=typeof item.response==="string"?item.response:(typeof item.token==="string"?item.token:(typeof item.choices?.[0]?.delta?.content==="string"?item.choices[0].delta.content:""));if(delta){fullReply+=delta;send({...base,choices:[{index:0,delta:{content:delta},finish_reason:null}]});}}catch{}
+                    }
+                  }
+                  if(!fullReply.trim())throw new Error("The model returned an empty response.");
+                  const completionTokens=Math.max(1,Math.ceil(fullReply.length/4)),totalTokens=inputEstimate+completionTokens;
+                  await chargeLupinTokens(env,owner,day,totalTokens);
+                  const statusAfter=await getLupinTokenStatus(env,owner),creditOverage=Math.max(0,statusAfter.used-statusAfter.dailyLimit);
+                  if(creditOverage>0)await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(totalTokens,creditOverage),Date.now(),owner).run();
+                  await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MIN(?,MAX(0,used_tokens+?-?)),updated_at=? WHERE owner_id=? AND usage_day=?").bind(HARD_GLOBAL_DAILY_TOKEN_CAP,totalTokens,reservation,Date.now(),"global:usage",day).run();
+                  settled=true;
+                  send({...base,choices:[{index:0,delta:{},finish_reason:"stop"}]});
+                  controller.enqueue(encoder.encode("data: [DONE]\\n\\n"));
+                  finished=true;
+                }catch(error){
+                  try{await releaseReservation()}catch{}
+                  console.error("OpenAI-compatible streaming failed",error?.message||error);
+                  send({error:{message:"The model stream failed before completion.",type:"server_error"}});
+                  controller.enqueue(encoder.encode("data: [DONE]\\n\\n"));
+                  finished=true;
+                }finally{
+                  try{reader.releaseLock()}catch{}
+                  if(!finished){try{await releaseReservation()}catch{}}
+                  controller.close();
+                }
+              },
+              async cancel(){try{await reader.cancel()}catch{}try{await releaseReservation()}catch{}}
+            });
+            return new Response(stream,{status:200,headers:streamHeaders});
           }
           const result=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7});
           const reply=result?.response??result?.result?.response??result?.choices?.[0]?.message?.content;
