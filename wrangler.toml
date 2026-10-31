@@ -18,3 +18,15 @@ binding = "BROWSER"
 binding = "DB"
 database_name = "lupin-cloud"
 database_id = "a77e4e58-b9d3-4fa2-9632-58d0ba4cddf3"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+head_sampling_rate = 1
+
+[observability.issues]
+enabled = true
