@@ -45,14 +45,22 @@
     if(!airlineToken){errorEl.textContent="Connect your Lupin Airlines account first using Connect airline.";return}
     button.disabled=true;const original=button.textContent;button.textContent="Purchasing…";
     const ownerId=window.LupinAccount?.user?.id||"signed-in";
-    const purchaseKey="lupin-token-purchase:"+ownerId+":"+pack;
-    let purchaseId=localStorage.getItem(purchaseKey);
-    if(!purchaseId){purchaseId=crypto.randomUUID();localStorage.setItem(purchaseKey,purchaseId);}
+    const purchaseKey="lupin-token-purchase:"+ownerId+":pending";
+    let pending=null;
+    try{pending=JSON.parse(localStorage.getItem(purchaseKey)||"null")}catch{}
+    if(!pending){
+      const legacy=["1000","5000"].map(oldPack=>({pack:oldPack,id:localStorage.getItem("lupin-token-purchase:"+ownerId+":"+oldPack)})).filter(item=>item.id);
+      if(legacy.length>1){errorEl.textContent="A previous token purchase has an unresolved reference. Check both balances before making another purchase.";button.disabled=false;button.textContent=original;return}
+      if(legacy.length===1)pending=legacy[0];
+    }
+    if(pending&&pending.pack!==pack){errorEl.textContent="A "+(pending.pack==="1000"?"1,000":"5,000")+"-token purchase is awaiting confirmation. Resolve that purchase before choosing another package.";button.disabled=false;button.textContent=original;return}
+    const purchaseId=pending?.id||crypto.randomUUID();
+    localStorage.setItem(purchaseKey,JSON.stringify({id:purchaseId,pack}));
     try{
       const response=await fetch(TOKEN_PURCHASE_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({pack,airlineToken,purchaseId})});
       const data=await response.json().catch(()=>({}));
-      if(!response.ok){if(data.retryable)localStorage.removeItem(purchaseKey);throw new Error(data.error||"Purchase failed.");}
-      localStorage.removeItem(purchaseKey);
+      if(!response.ok){if(data.retryable){localStorage.removeItem(purchaseKey);localStorage.removeItem("lupin-token-purchase:"+ownerId+":"+pack);}throw new Error(data.error||"Purchase failed.");}
+      localStorage.removeItem(purchaseKey);localStorage.removeItem("lupin-token-purchase:"+ownerId+":"+pack);
       if(data.balanceRefreshPending)await refreshLupinTokens();else renderTokenSnapshot(data);
       notify("Purchased "+Number(data.purchased).toLocaleString()+" LupinTokens for "+Number(data.milesSpent).toLocaleString()+" Lupin Miles.");
     }catch(error){errorEl.textContent=error.message||"Purchase failed."}
