@@ -383,7 +383,7 @@ export default {
             const releaseReservation=async()=>{if(!settled){settled=true;await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();}};
             const stream=new ReadableStream({
               async start(controller){
-                const send=(payload)=>controller.enqueue(encoder.encode("data: "+JSON.stringify(payload)+"\\n\\n"));
+                const send=(payload)=>controller.enqueue(encoder.encode("data: "+JSON.stringify(payload)+"\n\n"));
                 const base={id:completionId,object:"chat.completion.chunk",created,model};
                 let buffer="",fullReply="",finished=false;
                 try{
@@ -393,10 +393,10 @@ export default {
                     const part=await reader.read();
                     if(part.done)break;
                     buffer+=decoder.decode(part.value,{stream:true});
-                    const events=buffer.split(/\\r?\\n\\r?\\n/);
+                    const events=buffer.split(/\r?\n\r?\n/);
                     buffer=events.pop()||"";
                     for(const event of events){
-                      for(const line of event.split(/\\r?\\n/)){
+                      for(const line of event.split(/\r?\n/)){
                         if(!line.startsWith("data:"))continue;
                         const raw=line.slice(5).trim();
                         if(!raw||raw==="[DONE]")continue;
@@ -408,7 +408,7 @@ export default {
                   }
                   buffer+=decoder.decode();
                   if(buffer.trim()){
-                    for(const line of buffer.split(/\\r?\\n/)){
+                    for(const line of buffer.split(/\r?\n/)){
                       if(!line.startsWith("data:"))continue;
                       const raw=line.slice(5).trim();if(!raw||raw==="[DONE]")continue;
                       try{const item=JSON.parse(raw);const delta=typeof item.response==="string"?item.response:(typeof item.token==="string"?item.token:(typeof item.choices?.[0]?.delta?.content==="string"?item.choices[0].delta.content:""));if(delta){fullReply+=delta;send({...base,choices:[{index:0,delta:{content:delta},finish_reason:null}]});}}catch{}
@@ -426,7 +426,7 @@ export default {
                   finished=true;
                 }catch(error){
                   try{await releaseReservation()}catch{}
-                  console.error("OpenAI-compatible streaming failed",error?.message||error);
+                  console.error("OpenAI-compatible streaming failed",error?.name||"Error",error?.message||String(error),error?.stack||"");
                   send({error:{message:"The model stream failed before completion.",type:"server_error"}});
                   controller.enqueue(encoder.encode("data: [DONE]\\n\\n"));
                   finished=true;
