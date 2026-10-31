@@ -31,6 +31,7 @@ async function ensureLupinTokenTables(env) {
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_budgets (owner_id TEXT PRIMARY KEY, daily_limit INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_usage (owner_id TEXT NOT NULL, usage_day TEXT NOT NULL, used_tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(owner_id, usage_day))").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_credits (owner_id TEXT PRIMARY KEY, tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_token_purchases (purchase_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, pack TEXT NOT NULL, tokens INTEGER NOT NULL, miles_spent INTEGER NOT NULL, status TEXT NOT NULL, request_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)").run();
 }
 function getLupinTokenOwner(session, clientId) {
   if (session?.user?.id) return "user:" + session.user.id;
@@ -370,7 +371,8 @@ export default {
       const chosen=packages[pack];
       if(!chosen||!airlineToken)return json({error:"Choose a token package and connect Lupin Airlines."},400,origin);
       const owner="user:"+session.user.id;
-      let milesDebited=false;
+      const purchaseId=String(body.purchaseId||"");
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(purchaseId))return json({error:"A valid purchase reference is required. Refresh Lupin AI and try again."},400,origin);
       try{
         await ensureLupinTokenTables(env);
         const base="https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
@@ -379,26 +381,51 @@ export default {
         if(!meResponse.ok)return json({error:"Connect your Lupin Airlines account again before purchasing."},401,origin);
         if(String(me.username||"").toLowerCase()!==String(session.user.username||"").toLowerCase())return json({error:"Your Lupin AI and Lupin Airlines usernames must match to purchase tokens."},403,origin);
         if(Number(me.miles||0)<chosen.miles)return json({error:"Not enough Lupin Miles for this package."},400,origin);
-        const debit=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:-chosen.miles})});
-        const debitData=await debit.json().catch(()=>({}));
-        if(!debit.ok)return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
-        milesDebited=true;
         const now=Date.now();
+        const claim=await env.DB.prepare("INSERT INTO lupin_token_purchases(purchase_id,owner_id,pack,tokens,miles_spent,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?) ON CONFLICT(purchase_id) DO NOTHING").bind(purchaseId,owner,pack,chosen.tokens,chosen.miles,now,now).run();
+        if(!Number(claim.meta?.changes||0)){
+          const previous=await env.DB.prepare("SELECT owner_id,pack,tokens,miles_spent,status,request_id FROM lupin_token_purchases WHERE purchase_id=?").bind(purchaseId).first();
+          if(!previous||previous.owner_id!==owner||previous.pack!==pack)return json({error:"This purchase reference is already in use. Start a new purchase."},409,origin);
+          if(previous.status==="succeeded"){
+            try{return json({ok:true,purchased:Number(previous.tokens),milesSpent:Number(previous.miles_spent),alreadyProcessed:true,...await getLupinTokenStatus(env,owner)},200,origin);}
+            catch{return json({ok:true,purchased:Number(previous.tokens),milesSpent:Number(previous.miles_spent),alreadyProcessed:true,balanceRefreshPending:true},200,origin);}
+          }
+          if(previous.status==="refunded")return json({error:"The previous attempt was refunded. You may safely start a new purchase.",retryable:true},409,origin);
+          if(previous.status==="rejected")return json({error:"The previous attempt was rejected before miles were deducted. You may safely start a new purchase.",retryable:true},409,origin);
+          if(previous.status==="refund_pending")return json({error:"The automatic miles refund is still unconfirmed. Do not retry this purchase. Contact the Lupin owner with reference "+(previous.request_id||purchaseId)+"."},409,origin);
+          return json({error:"This purchase may already be processing. Check your Lupin Miles balance before starting another purchase.",code:"purchase_pending",requestId:previous.request_id||purchaseId},409,origin);
+        }
+        let debit;
         try{
-          await env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,now).run();
+          debit=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:-chosen.miles})});
+        }catch(debitError){
+          const requestId=crypto.randomUUID();
+          await env.DB.prepare("UPDATE lupin_token_purchases SET status='unknown',request_id=?,updated_at=? WHERE purchase_id=? AND owner_id=?").bind(requestId,Date.now(),purchaseId,owner).run();
+          console.error("LupinTokens mileage debit outcome unknown",JSON.stringify({requestId,message:String(debitError?.message||debitError)}));
+          return json({error:"The mileage service did not confirm the debit. Do not retry yet. Check your Lupin Airlines balance and contact the Lupin owner with reference "+requestId+".",requestId},503,origin);
+        }
+        const debitData=await debit.json().catch(()=>({}));
+        if(!debit.ok){
+          await env.DB.prepare("UPDATE lupin_token_purchases SET status='rejected',updated_at=? WHERE purchase_id=? AND owner_id=?").bind(Date.now(),purchaseId,owner).run();
+          return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
+        }
+        try{
+          await env.DB.batch([
+            env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,Date.now()),
+            env.DB.prepare("UPDATE lupin_token_purchases SET status='succeeded',updated_at=? WHERE purchase_id=? AND owner_id=? AND status='pending'").bind(Date.now(),purchaseId,owner)
+          ]);
         }catch(creditError){
           let refundConfirmed=false;
           try{
             const refund=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:chosen.miles})});
             refundConfirmed=refund.ok;
           }catch(refundError){console.error("LupinTokens mileage refund failed",refundError?.message||String(refundError));}
-          const requestId=crypto.randomUUID();
-          console.error("LupinTokens purchase credit write failed",JSON.stringify({requestId,message:String(creditError?.message||creditError),refundConfirmed}));
-          if(!refundConfirmed)return json({error:"Miles were deducted but the automatic refund could not be confirmed. Do not retry this purchase. Contact the Lupin owner with reference "+requestId+".",requestId},503,origin);
-          milesDebited=false;
-          throw creditError;
+          const requestId=crypto.randomUUID(),status=refundConfirmed?"refunded":"refund_pending";
+          await env.DB.prepare("UPDATE lupin_token_purchases SET status=?,request_id=?,updated_at=? WHERE purchase_id=? AND owner_id=?").bind(status,requestId,Date.now(),purchaseId,owner).run();
+          console.error("LupinTokens credit write failed",JSON.stringify({requestId,message:String(creditError?.message||creditError),refundConfirmed}));
+          if(refundConfirmed)return json({error:"The token credit could not be saved, but the Lupin Miles refund was confirmed. You may safely try again.",retryable:true,requestId},503,origin);
+          return json({error:"Miles were deducted but the automatic refund could not be confirmed. Do not retry this purchase. Contact the Lupin owner with reference "+requestId+".",requestId},503,origin);
         }
-        milesDebited=false;
         try{
           const status=await getLupinTokenStatus(env,owner);
           return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,...status},200,origin);
@@ -408,8 +435,8 @@ export default {
           return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,balanceRefreshPending:true,requestId},200,origin);
         }
       }catch(error){
-        console.error("LupinTokens purchase failed",JSON.stringify({message:String(error?.message||error),milesDebited}));
-        return json({error:"Purchase could not be completed. Please try again."},503,origin);
+        console.error("LupinTokens purchase failed",JSON.stringify({purchaseId,message:String(error?.message||error)}));
+        return json({error:"Purchase could not be completed. No confirmed mileage debit was recorded. Please try again with a new purchase reference."},503,origin);
       }
     }
 
