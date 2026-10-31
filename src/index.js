@@ -373,6 +373,7 @@ export default {
       const owner="user:"+session.user.id;
       const purchaseId=String(body.purchaseId||"");
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(purchaseId))return json({error:"A valid purchase reference is required. Refresh Lupin AI and try again."},400,origin);
+      let debitAttempted=false;
       try{
         await ensureLupinTokenTables(env);
         const base="https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
@@ -397,6 +398,7 @@ export default {
         }
         let debit;
         try{
+          debitAttempted=true;
           debit=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:-chosen.miles})});
         }catch(debitError){
           const requestId=crypto.randomUUID();
@@ -407,7 +409,7 @@ export default {
         const debitData=await debit.json().catch(()=>({}));
         if(!debit.ok){
           await env.DB.prepare("UPDATE lupin_token_purchases SET status='rejected',updated_at=? WHERE purchase_id=? AND owner_id=?").bind(Date.now(),purchaseId,owner).run();
-          return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
+          return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added.",retryable:true},400,origin);
         }
         try{
           await env.DB.batch([
@@ -435,8 +437,9 @@ export default {
           return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,balanceRefreshPending:true,requestId},200,origin);
         }
       }catch(error){
-        console.error("LupinTokens purchase failed",JSON.stringify({purchaseId,message:String(error?.message||error)}));
-        return json({error:"Purchase could not be completed. No confirmed mileage debit was recorded. Please try again with a new purchase reference."},503,origin);
+        const requestId=crypto.randomUUID();
+        console.error("LupinTokens purchase failed",JSON.stringify({purchaseId,requestId,debitAttempted,message:String(error?.message||error)}));
+        return json({error:debitAttempted?"The purchase outcome is uncertain. Do not retry until you check your Lupin Miles and LupinTokens balances. Contact the Lupin owner with reference "+requestId+".":"Purchase could not be completed before the mileage debit. You may safely try again.",requestId,retryable:!debitAttempted},503,origin);
       }
     }
 
