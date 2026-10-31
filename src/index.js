@@ -35,8 +35,8 @@ async function ensureLupinTokenTables(env) {
 }
 function getLupinTokenOwner(session, clientId) {
   if (session?.user?.id) return "user:" + session.user.id;
-  const id = String(clientId || "").slice(0,80);
-  return /^[a-zA-Z0-9_-]{16,80}$/.test(id) ? "anon:" + id : null;
+  const id = String(clientId || "");
+  return /^client_[a-f0-9]{32}$/i.test(id) ? "anon:" + id : null;
 }
 async function getLupinTokenStatus(env, owner) {
   const day = new Date().toISOString().slice(0,10);
@@ -51,9 +51,6 @@ async function getLupinTokenStatus(env, owner) {
 async function reserveLupinUsage(env, owner, day, amount, limit) {
   const result=await env.DB.prepare("INSERT INTO lupin_token_usage (owner_id,usage_day,used_tokens,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,usage_day) DO UPDATE SET used_tokens=used_tokens+excluded.used_tokens,updated_at=excluded.updated_at WHERE lupin_token_usage.used_tokens+excluded.used_tokens<=?").bind(owner,day,amount,Date.now(),limit).run();
   return Number(result.meta?.changes||0)>0;
-}
-async function adjustLupinUsage(env, owner, day, reserved, actual) {
-  await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens+?-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(actual,reserved,Date.now(),owner,day).run();
 }
 async function settleLupinUsagePair(env, owner, day, reserved, actual, usedBefore, dailyLimit, creditsAvailable) {
   const now=Date.now();
