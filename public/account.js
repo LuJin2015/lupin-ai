@@ -80,8 +80,9 @@
     }
   }
   window.addEventListener("storage", event => {
-    if (event.key !== "lupinCloudAccount") return;
-    const shared = sharedSession(),nextToken=shared?.token||"";
+    if (event.key !== "lupinCloudAccount" && event.key !== TOKEN_KEY) return;
+    const shared = sharedSession();
+    const nextToken=shared?.token||(event.key===TOKEN_KEY?localStorage.getItem(TOKEN_KEY)||"":"");
     const changed=nextToken!==token;
     token=nextToken;
     if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
