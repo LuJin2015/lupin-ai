@@ -361,7 +361,7 @@ export default {
         await ensureLupinTokenTables(env);
         const status=await getLupinTokenStatus(env,owner);
         const inputEstimate=Math.ceil(messages.reduce((n,m)=>n+m.content.length,0)/4);
-        const outputLimit=Math.min(1200,Math.max(150,Number(body.max_tokens)||700));
+        const outputLimit=Math.min(1200,Math.max(150,Number(body.max_tokens??body.max_completion_tokens)||700));
         if(status.globalUsed+inputEstimate+outputLimit>status.globalLimit)return json({error:{message:"Lupin AI has reached its shared daily safety cap. Try again after the daily reset.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
         if(status.used+inputEstimate+outputLimit>status.dailyLimit+status.credits)return json({error:{message:"Your LupinTokens allowance is exhausted. Try again after the daily reset or purchase more LupinTokens.",type:"rate_limit_error",code:"lupin_tokens_limit"}},429,origin);
         const reservation=inputEstimate+outputLimit;
@@ -378,6 +378,9 @@ export default {
           if(typeof reply!=="string"||!reply.trim())throw new Error("The model returned an empty response.");
           const completionTokens=Math.max(1,Math.ceil(reply.length/4)),promptTokens=inputEstimate,totalTokens=inputEstimate+completionTokens;
           await chargeLupinTokens(env,owner,day,totalTokens);
+          const statusAfter=await getLupinTokenStatus(env,owner);
+          const creditOverage=Math.max(0,statusAfter.used-statusAfter.dailyLimit);
+          if(creditOverage>0)await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(totalTokens,creditOverage),Date.now(),owner).run();
           await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MIN(?,MAX(0,used_tokens+?-?)),updated_at=? WHERE owner_id=? AND usage_day=?").bind(HARD_GLOBAL_DAILY_TOKEN_CAP,totalTokens,reservation,Date.now(),"global:usage",day).run();
           const now=Math.floor(Date.now()/1000);
           return json({id:"chatcmpl-"+crypto.randomUUID().replace(/-/g,""),object:"chat.completion",created:now,model:"lupin-ai",choices:[{index:0,message:{role:"assistant",content:reply},finish_reason:"stop"}],usage:{prompt_tokens:promptTokens,completion_tokens:completionTokens,total_tokens:totalTokens}},200,origin);
