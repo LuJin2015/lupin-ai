@@ -99,6 +99,32 @@ function json(data, status = 200, origin = "") {
   }
   return new Response(JSON.stringify(data), { status, headers });
 }
+async function readJsonLimited(request, maxBytes) {
+  const declared=Number(request.headers.get("Content-Length")||0);
+  if(Number.isFinite(declared)&&declared>maxBytes)throw Object.assign(new Error("Request body is too large."),{status:413});
+  if(!request.body)throw Object.assign(new Error("Request body must be valid JSON."),{status:400});
+  const reader=request.body.getReader(),chunks=[];
+  let total=0;
+  try {
+    while(true) {
+      const part=await reader.read();
+      if(part.done)break;
+      total+=part.value.byteLength;
+      if(total>maxBytes) {
+        try{await reader.cancel()}catch{}
+        throw Object.assign(new Error("Request body is too large."),{status:413});
+      }
+      chunks.push(part.value);
+    }
+  } finally {
+    try{reader.releaseLock()}catch{}
+  }
+  const bytes=new Uint8Array(total);
+  let offset=0;
+  for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  try{return JSON.parse(new TextDecoder().decode(bytes));}
+  catch{throw Object.assign(new Error("Request body must be valid JSON."),{status:400});}
+}
 function validPublicUrl(raw) {
   try {
     const u = new URL(raw);
@@ -201,7 +227,7 @@ export default {
       let accountStage="routing";
       try {
         if (url.pathname==="/api/auth/register" && request.method==="POST") {
-          let body; try{body=await request.json()}catch{return json({error:"Enter valid account details."},400,origin)}
+          let body; try{body=await readJsonLimited(request,16*1024)}catch(error){return json({error:error.message},error.status||400,origin)}
           const username=String(body.username||"").trim(),password=String(body.password||"");
           if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return json({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);
           if(password.length<8||password.length>128)return json({error:"Password must be 8–128 characters."},400,origin);
@@ -214,7 +240,7 @@ export default {
           return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:created}},201,origin);
         }
         if(url.pathname==="/api/auth/login"&&request.method==="POST"){
-          let body;try{body=await request.json()}catch{return json({error:"Enter your username and password."},400,origin)}
+          let body;try{body=await readJsonLimited(request,16*1024)}catch(error){return json({error:error.message},error.status||400,origin)}
           const username=String(body.username||"").trim(),password=String(body.password||"");
           if(!username||!password||password.length>128)return json({error:"Enter your username and password."},400,origin);
           let row=await env.DB.prepare("SELECT id,username,password_hash,created_at FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
@@ -256,7 +282,7 @@ export default {
       if (!env.DB) return json({error:"LupinTokens database is unavailable."},503,origin);
       const session=await sessionUser(request,env);
       let body={};
-      if(request.method==="POST"){try{body=await request.json()}catch{return json({error:"Enter a valid daily limit."},400,origin)}}
+      if(request.method==="POST"){try{body=await readJsonLimited(request,4096)}catch(error){return json({error:error.message},error.status||400,origin)}}
       const owner=getLupinTokenOwner(session,body.clientId||url.searchParams.get("clientId"));
       if(!owner)return json({error:"Could not identify this Lupin AI session. Refresh the page and try again."},400,origin);
       try{
@@ -280,7 +306,7 @@ export default {
       if (!env.DB) return json({error:"LupinTokens database is unavailable."},503,origin);
       const session=await sessionUser(request,env);
       if(!session?.user?.id) return json({error:"Sign in to Lupin AI before purchasing LupinTokens."},401,origin);
-      let body;try{body=await request.json()}catch{return json({error:"Invalid purchase request."},400,origin)}
+      let body;try{body=await readJsonLimited(request,4096)}catch(error){return json({error:error.message},error.status||400,origin)}
       const airlineToken=String(body.airlineToken||"").slice(0,200);
       const pack=String(body.pack||"");
       const packages={"1000":{tokens:1000,miles:100},"5000":{tokens:5000,miles:400}};
@@ -324,13 +350,12 @@ export default {
           return json({keys:rows.results||[]},200,origin);
         }
         if(url.pathname==="/api/keys" && request.method==="POST") {
-          let body;try{body=await request.json()}catch{return json({error:"Enter a valid key name."},400,origin)}
+          let body;try{body=await readJsonLimited(request,4096)}catch(error){return json({error:error.message},error.status||400,origin)}
           const name=String(body.name||"").trim().replace(/[<>]/g,"").slice(0,48)||"New API key";
-          const count=await env.DB.prepare("SELECT COUNT(*) AS total FROM lupin_api_keys WHERE owner_id=? AND revoked_at IS NULL").bind(session.user.id).first();
-          if(Number(count?.total||0)>=10)return json({error:"You can have up to 10 active API keys. Revoke one before creating another."},409,origin);
           const secret="sk-lupin-"+randomToken(32);
           const id=crypto.randomUUID(),created=new Date().toISOString(),hash=await cloudHex(secret);
-          await env.DB.prepare("INSERT INTO lupin_api_keys(id,owner_id,key_hash,key_prefix,name,created_at) VALUES(?,?,?,?,?,?)").bind(id,session.user.id,hash,secret.slice(0,18)+"…",name,created).run();
+          const inserted=await env.DB.prepare("INSERT INTO lupin_api_keys(id,owner_id,key_hash,key_prefix,name,created_at) SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM lupin_api_keys WHERE owner_id=? AND revoked_at IS NULL)<10").bind(id,session.user.id,hash,secret.slice(0,18)+"…",name,created,session.user.id).run();
+          if(!inserted.meta?.changes)return json({error:"You can have up to 10 active API keys. Revoke one before creating another."},409,origin);
           return json({ok:true,key:secret,apiKey:{id,name,keyPrefix:secret.slice(0,18)+"…",createdAt:created}},201,origin);
         }
         const match=url.pathname.match(/^\/api\/keys\/([a-f0-9-]{36})$/i);
@@ -362,9 +387,7 @@ export default {
           return json({object:"list",data:[{id:"lupin-ai",object:"model",created:0,owned_by:"lupin"},{id:"qwen3.8-27b",object:"model",created:0,owned_by:"lupin"}]},200,origin);
         }
         if(request.method!=="POST")return json({error:{message:"Use POST for chat completions.",type:"invalid_request_error"}},405,origin);
-        const apiLength=Number(request.headers.get("Content-Length")||0);
-        if(apiLength>MAX_API_BODY)return json({error:{message:"Request body is too large.",type:"invalid_request_error",code:"payload_too_large"}},413,origin);
-        let body;try{body=await request.json()}catch{return json({error:{message:"Request body must be valid JSON.",type:"invalid_request_error"}},400,origin)}
+        let body;try{body=await readJsonLimited(request,MAX_API_BODY)}catch(error){return json({error:{message:error.message,type:"invalid_request_error",code:error.status===413?"payload_too_large":"invalid_json"}},error.status||400,origin)}
         if(!Array.isArray(body.messages)||!body.messages.length||body.messages.length>40)return json({error:{message:"messages must be a non-empty array of at most 40 items.",type:"invalid_request_error",param:"messages"}},400,origin);
         const messages=body.messages.slice(-20).map(m=>({role:["system","user","assistant"].includes(m?.role)?m.role:"user",content:String(m?.content??"").slice(0,6000)}));
         if(!messages.some(m=>m.role==="user"&&m.content.trim()))return json({error:{message:"At least one non-empty user message is required.",type:"invalid_request_error"}},400,origin);
@@ -500,7 +523,7 @@ export default {
         }
         if (request.method === "POST") {
           let body;
-          try { body = await request.json(); } catch { return json({ error: "Request body must be valid JSON." }, 400, origin); }
+          try { body = await readJsonLimited(request,2*1024*1024); } catch(error) { return json({error:error.message},error.status||400,origin); }
           const id = String(body.id || "").slice(0, 80);
           const title = String(body.title || "New chat").replace(/\s+/g, " ").slice(0, 120);
           if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || !Array.isArray(body.messages) || body.messages.length > 100) return json({ error: "Invalid chat payload." }, 400, origin);
@@ -523,10 +546,9 @@ export default {
     }
     if (request.method !== "POST") return json({ error: "Use POST for chat requests." }, 405, origin);
     if (!env.AI || !env.DB) return json({ error: "Lupin AI is unavailable because a required AI or database binding is missing." }, 503, origin);
-    const chatLength=Number(request.headers.get("Content-Length")||0);
-    if(chatLength>MAX_BODY)return json({error:"This message is too large. Reduce the attachments and try again."},413,origin);
     let body;
-    try { body = await request.json(); } catch { return json({ error: "Request body must be valid JSON." }, 400, origin); }
+    try { body = await readJsonLimited(request,MAX_BODY); }
+    catch(error) { return json({error:error.status===413?"This message is too large. Reduce the attachments and try again.":error.message},error.status||400,origin); }
     if (!Array.isArray(body.messages)) return json({ error: "messages must be an array." }, 400, origin);
     const messages = body.messages.slice(-20).map(m => ({ role: m?.role === "assistant" ? "assistant" : "user", content: String(m?.content ?? "").slice(0, MAX_CHAT_MESSAGE) }));
     if (!messages.some(m => m.role === "user" && m.content.trim())) return json({ error: "Enter a message first." }, 400, origin);
