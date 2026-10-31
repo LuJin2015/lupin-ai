@@ -54,12 +54,18 @@ async function reserveLupinUsage(env, owner, day, amount, limit) {
 async function adjustLupinUsage(env, owner, day, reserved, actual) {
   await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens+?-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(actual,reserved,Date.now(),owner,day).run();
 }
-async function adjustLupinUsagePair(env, owner, day, reserved, actual) {
+async function settleLupinUsagePair(env, owner, day, reserved, actual, usedBefore, dailyLimit, creditsAvailable) {
   const now=Date.now();
-  await env.DB.batch([
+  const previousOverage=Math.max(0,usedBefore-dailyLimit);
+  const nextOverage=Math.max(0,usedBefore+actual-dailyLimit);
+  const creditDebit=Math.min(Math.max(0,creditsAvailable),Math.max(0,nextOverage-previousOverage));
+  const statements=[
     env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens+?-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(actual,reserved,now,owner,day),
     env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens+?-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(actual,reserved,now,"global:usage",day)
-  ]);
+  ];
+  if(creditDebit>0)statements.push(env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(creditDebit,now,owner));
+  await env.DB.batch(statements);
+  return creditDebit;
 }
 async function refundLupinUsage(env, owner, day, amount) {
   if(!owner||!amount)return;
@@ -446,6 +452,7 @@ export default {
           await refundLupinUsage(env,owner,day,reservation);
           return json({error:{message:"Lupin AI has reached its shared daily safety cap.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
         }
+        let usageSettled=false;
         try {
           const model=String(body.model||"lupin-ai");
           if(!["lupin-ai","qwen3.8-27b"].includes(model)){
@@ -503,11 +510,9 @@ export default {
                   if(cancelled)throw new Error("The client cancelled the stream.");
                   if(!fullReply.trim())throw new Error("The model returned an empty response.");
                   const completionTokens=Math.max(1,estimateTextTokens(fullReply)),totalTokens=inputEstimate+completionTokens;
-                  settlementPromise=adjustLupinUsagePair(env,owner,day,reservation,totalTokens);
+                  settlementPromise=settleLupinUsagePair(env,owner,day,reservation,totalTokens,status.used,status.dailyLimit,status.credits);
                   await settlementPromise;
                   settled=true;
-                  const statusAfter=await getLupinTokenStatus(env,owner),creditOverage=Math.max(0,statusAfter.used-statusAfter.dailyLimit);
-                  if(creditOverage>0)await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(totalTokens,creditOverage),Date.now(),owner).run();
                   send({...base,choices:[{index:0,delta:{},finish_reason:"stop"}]});
                   if(!cancelled)controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                   finished=true;
@@ -530,15 +535,13 @@ export default {
           const result=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7});
           const reply=result?.response??result?.result?.response??result?.choices?.[0]?.message?.content;
           if(typeof reply!=="string"||!reply.trim())throw new Error("The model returned an empty response.");
-          const completionTokens=Math.max(1,Math.ceil(reply.length/4)),promptTokens=inputEstimate,totalTokens=inputEstimate+completionTokens;
-          await adjustLupinUsagePair(env,owner,day,reservation,totalTokens);
-          const statusAfter=await getLupinTokenStatus(env,owner);
-          const creditOverage=Math.max(0,statusAfter.used-statusAfter.dailyLimit);
-          if(creditOverage>0)await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(totalTokens,creditOverage),Date.now(),owner).run();
+          const completionTokens=Math.max(1,estimateTextTokens(reply)),promptTokens=inputEstimate,totalTokens=inputEstimate+completionTokens;
+          await settleLupinUsagePair(env,owner,day,reservation,totalTokens,status.used,status.dailyLimit,status.credits);
+          usageSettled=true;
           const now=Math.floor(Date.now()/1000);
           return json({id:"chatcmpl-"+crypto.randomUUID().replace(/-/g,""),object:"chat.completion",created:now,model,choices:[{index:0,message:{role:"assistant",content:reply},finish_reason:"stop"}],usage:{prompt_tokens:promptTokens,completion_tokens:completionTokens,total_tokens:totalTokens}},200,origin);
         } catch(error) {
-          try{await refundLupinUsagePair(env,owner,day,reservation);}catch(refundError){console.error("Lupin token reservation refund failed",refundError?.message||String(refundError));}
+          if(!usageSettled){try{await refundLupinUsagePair(env,owner,day,reservation);}catch(refundError){console.error("Lupin token reservation refund failed",refundError?.message||String(refundError));}}
           const requestId=crypto.randomUUID();
           console.error("OpenAI-compatible completion failed",JSON.stringify({requestId,name:error?.name||"Error",message:String(error?.message||error).slice(0,500),stack:String(error?.stack||"").slice(0,2000)}));
           return json({error:{message:"Cloudflare Workers AI could not complete the request.",type:"server_error",request_id:requestId}},502,origin);
@@ -740,12 +743,12 @@ export default {
       let lupinTokens=null;
       if(tokenOwner){
         const charged=Math.max(1,estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n")+"\n"+webContext+"\n"+reply)+images.length*1024);
-        if(ownerReservation>0){await adjustLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation,charged);ownerReservation=0;globalReservation=0;}
-        const statusBefore=await getLupinTokenStatus(env,tokenOwner);
-        const excess=Math.max(0,statusBefore.used-statusBefore.dailyLimit);
-        if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(charged,excess),Date.now(),tokenOwner).run();
-        const updated=await getLupinTokenStatus(env,tokenOwner);
-        lupinTokens={...updated,charged};
+        let creditDebit=0;
+        if(ownerReservation>0){
+          creditDebit=await settleLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation,charged,tokenLimitStatus.used,tokenLimitStatus.dailyLimit,tokenLimitStatus.credits);
+          ownerReservation=0;globalReservation=0;
+        }
+        lupinTokens={...tokenLimitStatus,used:tokenLimitStatus.used+charged,globalUsed:tokenLimitStatus.globalUsed+charged,credits:Math.max(0,tokenLimitStatus.credits-creditDebit),charged};
       }
       return json({ reply, model, browsed: Boolean(webContext && !webContext.startsWith("WEB BROWSING ERROR:")), ...(lupinTokens?{lupinTokens}:{}) }, 200, origin);
     } catch(error) {
