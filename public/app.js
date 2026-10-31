@@ -111,11 +111,8 @@
       const data=await cloudRequest(cloudUrl(),{},authToken);
       if(generation!==historySyncGeneration||scope!==currentChatScope())return;
       const cloudChats=Array.isArray(data.chats)?data.chats:[];
-      if(scope.startsWith("user:")){
-        let migrated=false;
-        for(const chat of chats)if(chat.ownerScope==="legacy"){chat.ownerScope=scope;migrated=true;}
-        if(migrated)saveChats();
-      }
+      // Old chats have no reliable owner metadata. Keep them device-only
+      // instead of silently importing them into whichever account signs in.
       const otherScopeChats=chats.filter(chat=>chat.ownerScope!==scope);
       const localScopeChats=chats.filter(chat=>chat.ownerScope===scope);
       const cloudById=new Map(cloudChats.filter(chat=>chat&&typeof chat.id==="string"&&Array.isArray(chat.messages)).map(chat=>[chat.id,{...chat,ownerScope:scope}]));
