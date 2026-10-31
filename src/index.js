@@ -422,13 +422,13 @@ export default {
                   await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MIN(?,MAX(0,used_tokens+?-?)),updated_at=? WHERE owner_id=? AND usage_day=?").bind(HARD_GLOBAL_DAILY_TOKEN_CAP,totalTokens,reservation,Date.now(),"global:usage",day).run();
                   settled=true;
                   send({...base,choices:[{index:0,delta:{},finish_reason:"stop"}]});
-                  controller.enqueue(encoder.encode("data: [DONE]\\n\\n"));
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                   finished=true;
                 }catch(error){
                   try{await releaseReservation()}catch{}
                   console.error("OpenAI-compatible streaming failed",error?.name||"Error",error?.message||String(error),error?.stack||"");
                   send({error:{message:"The model stream failed before completion.",type:"server_error"}});
-                  controller.enqueue(encoder.encode("data: [DONE]\\n\\n"));
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                   finished=true;
                 }finally{
                   try{reader.releaseLock()}catch{}
