@@ -18,7 +18,7 @@ When WEB SOURCES are supplied, use them to answer the user's question and includ
 const ALLOWED_ORIGIN = "https://lujin2015.github.io";
 const MAX_BODY = 32 * 1024 * 1024;
 const MAX_API_BODY = 512 * 1024;
-const MAX_WEB_CONTEXT = 16000;
+const MAX_WEB_CONTEXT = 4000;
 const MAX_CHAT_MESSAGE = 50000;
 const WEB_CONTEXT_RESERVE_TOKENS = 4000;
 const SESSION_DAYS = 30;
@@ -132,7 +132,7 @@ async function sessionUser(request, env) {
 
 
 function json(data, status = 200, origin = "") {
-  const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Vary": "Origin" };
+  const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Vary": "Origin", "X-Content-Type-Options":"nosniff", "Referrer-Policy":"strict-origin-when-cross-origin" };
   if (origin === ALLOWED_ORIGIN) {
     headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN;
     headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS";
@@ -168,11 +168,11 @@ function validPublicUrl(raw) {
   try {
     const u = new URL(raw);
     if (!["http:", "https:"].includes(u.protocol) || u.username || u.password) return null;
-    const h = u.hostname.toLowerCase();
-    if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") ||
-        h === "metadata.google.internal" || h === "0.0.0.0" || h === "::1" ||
-        /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) ||
-        /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)) return null;
+    const h = u.hostname.toLowerCase().replace(/\.$/,"");
+    const isIpLiteral=/^(?:\d{1,3}\.){3}\d{1,3}$/.test(h)||h.startsWith("[");
+    if (isIpLiteral || (u.port && u.port!=="80" && u.port!=="443") ||
+        h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") ||
+        h === "metadata.google.internal" || h.endsWith(".metadata.google.internal")) return null;
     return u;
   } catch { return null; }
 }
