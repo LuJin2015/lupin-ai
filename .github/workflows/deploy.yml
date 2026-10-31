@@ -16,6 +16,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install
+      - name: Check JavaScript syntax
+        run: npm run check
       - name: Deploy Worker
         run: npx wrangler deploy
         env:
