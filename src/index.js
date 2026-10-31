@@ -111,6 +111,11 @@ async function cloudPasswordHash(password,salt) {
   const bits=pbkdf2(sha256,encoder.encode(password),encoder.encode(salt),{c:100000,dkLen:32});
   return [...bits].map(x=>x.toString(16).padStart(2,"0")).join("");
 }
+async function recordLoginFailure(env,key) {
+  const now=Date.now(),windowMs=15*60*1000,lockMs=15*60*1000,cutoff=now-windowMs;
+  await env.DB.prepare("INSERT INTO lupin_auth_login_attempts(attempt_key,attempts,window_started_at,locked_until,updated_at) VALUES(?,1,?,0,?) ON CONFLICT(attempt_key) DO UPDATE SET attempts=CASE WHEN lupin_auth_login_attempts.window_started_at<? THEN 1 ELSE lupin_auth_login_attempts.attempts+1 END,window_started_at=CASE WHEN lupin_auth_login_attempts.window_started_at<? THEN excluded.window_started_at ELSE lupin_auth_login_attempts.window_started_at END,locked_until=CASE WHEN (CASE WHEN lupin_auth_login_attempts.window_started_at<? THEN 1 ELSE lupin_auth_login_attempts.attempts+1 END)>=5 THEN ? ELSE lupin_auth_login_attempts.locked_until END,updated_at=excluded.updated_at").bind(key,now,now,cutoff,cutoff,cutoff,now+lockMs).run();
+  return env.DB.prepare("SELECT attempts,locked_until FROM lupin_auth_login_attempts WHERE attempt_key=?").bind(key).first();
+}
 async function sessionUser(request, env) {
   const header=request.headers.get("Authorization")||"";
   const token=header.startsWith("Bearer ")?header.slice(7):"";
@@ -269,6 +274,7 @@ export default {
       let accountStage="routing";
       try {
         if (url.pathname==="/api/auth/register" && request.method==="POST") {
+          accountStage="register";
           let body; try{body=await readJsonLimited(request,16*1024)}catch(error){return json({error:error.message},error.status||400,origin)}
           const username=String(body.username||"").trim(),password=String(body.password||"");
           if(!/^[A-Za-z0-9_-]{3,20}$/.test(username))return json({error:"Username must be 3–20 letters, numbers, _ or -."},400,origin);
@@ -282,23 +288,30 @@ export default {
           return json({ok:true,token,expiresAt:expires,user:{id,username,createdAt:created}},201,origin);
         }
         if(url.pathname==="/api/auth/login"&&request.method==="POST"){
+          accountStage="login";
           let body;try{body=await readJsonLimited(request,16*1024)}catch(error){return json({error:error.message},error.status||400,origin)}
           const username=String(body.username||"").trim(),password=String(body.password||"");
           if(!username||!password||password.length>128)return json({error:"Enter your username and password."},400,origin);
+          await env.DB.prepare("CREATE TABLE IF NOT EXISTS lupin_auth_login_attempts (attempt_key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, window_started_at INTEGER NOT NULL, locked_until INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)").run();
+          const throttleAddress=String(request.headers.get("CF-Connecting-IP")||"unknown").slice(0,64);
+          const throttleKey=await digest("lupin-login:"+username.toLowerCase()+":"+throttleAddress);
+          const throttle=await env.DB.prepare("SELECT locked_until FROM lupin_auth_login_attempts WHERE attempt_key=?").bind(throttleKey).first();
+          if(Number(throttle?.locked_until||0)>Date.now())return json({error:"Too many unsuccessful sign-in attempts. Try again in "+Math.ceil((Number(throttle.locked_until)-Date.now())/60000)+" minute(s)."},429,origin);
           let row=await env.DB.prepare("SELECT id,username,password_hash,created_at FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
           if(row){
             const parts=String(row.password_hash||"").split("$");
-            if(parts.length!==2||!constantTimeEqual(await cloudPasswordHash(password,parts[0]),parts[1]))return json({error:"Username or password is incorrect."},401,origin);
+            if(parts.length!==2||!constantTimeEqual(await cloudPasswordHash(password,parts[0]),parts[1])){await recordLoginFailure(env,throttleKey);return json({error:"Username or password is incorrect."},401,origin);}
           } else {
             // Migrate a legacy Lupin AI account after a successful old-password check.
             const legacy=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
-            if(!legacy)return json({error:"Username or password is incorrect."},401,origin);
+            if(!legacy){await cloudPasswordHash(password,"lupin-ai-login-dummy-salt-v1");await recordLoginFailure(env,throttleKey);return json({error:"Username or password is incorrect."},401,origin);}
             const legacyHash=passwordHash(password,legacy.password_salt);
-            if(!constantTimeEqual(legacyHash,legacy.password_hash))return json({error:"Username or password is incorrect."},401,origin);
+            if(!constantTimeEqual(legacyHash,legacy.password_hash)){await recordLoginFailure(env,throttleKey);return json({error:"Username or password is incorrect."},401,origin);}
             const salt=crypto.randomUUID(),hash=await cloudPasswordHash(password,salt),created=new Date(Number(legacy.created_at)||Date.now()).toISOString();
             await env.DB.prepare("INSERT INTO lupin_accounts(id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(legacy.id,legacy.username,salt+"$"+hash,created).run();
             row={id:legacy.id,username:legacy.username,password_hash:salt+"$"+hash,created_at:created};
           }
+          await env.DB.prepare("DELETE FROM lupin_auth_login_attempts WHERE attempt_key=?").bind(throttleKey).run();
           const token=randomToken(),tokenHash=await cloudHex(token),created=new Date().toISOString(),expires=new Date(Date.now()+SESSION_DAYS*86400000).toISOString();
           await env.DB.prepare("INSERT INTO lupin_sessions(token_hash,account_id,expires_at,created_at) VALUES(?,?,?,?)").bind(tokenHash,row.id,expires,created).run();
           return json({ok:true,token,expiresAt:expires,user:{id:row.id,username:row.username,createdAt:row.created_at}},200,origin);
@@ -315,7 +328,9 @@ export default {
         }
         return json({error:"Unknown account action."},404,origin);
       } catch(error) {
-        console.error("Lupin Cloud account API failure",url.pathname,accountStage,error?.message||error);
+        const message=String(error?.message||error);
+        console.error("Lupin Cloud account API failure",url.pathname,accountStage,message);
+        if(accountStage==="register"&&/UNIQUE constraint failed: lupin_accounts\.username/i.test(message))return json({error:"That Lupin Cloud username is already taken."},409,origin);
         return json({error:"Account service failed. Please try again."},500,origin);
       }
     }
