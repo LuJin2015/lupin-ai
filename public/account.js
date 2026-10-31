@@ -78,17 +78,17 @@
     const shared = sharedSession();
     token = shared?.token || "";
     if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
-    restore();
+    window.LupinAccount.ready=restore();
   });
   window.addEventListener("lupin-auth-change", event => {
     if (event.detail?.token && event.detail.token !== token) {
       token = event.detail.token;
       localStorage.setItem(TOKEN_KEY, token);
-      restore();
+      window.LupinAccount.ready=restore();
     } else if (!event.detail?.token && token) {
       token = ""; user = null; localStorage.removeItem(TOKEN_KEY); renderUser();
     }
   });
-  window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:restore, currentUser:sharedSession };
-  restore();
+  window.LupinAccount = { get user(){return user;}, get token(){return token;}, open:show, refresh:()=>{window.LupinAccount.ready=restore();return window.LupinAccount.ready;}, currentUser:sharedSession, ready:Promise.resolve() };
+  window.LupinAccount.ready=restore();
 })();
