@@ -145,25 +145,25 @@
   }
   function saveChats(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(chats.slice(0,50)))}catch{notify("Chat history could not be saved in this browser.")}}
   function newId(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8)}
-  function currentChat(){return chats.find(chat=>chat.id===activeChatId&&chat.ownerScope===currentChatScope())}
+  function currentChat(){return chats.find(chat=>chat.id===activeChatId&&(chat.ownerScope===currentChatScope()||(currentChatScope()==="anonymous"&&chat.ownerScope==="legacy")))}
   function setChatUrl(id,push=false){const url=new URL(location.href);if(id)url.searchParams.set("chat",id);else url.searchParams.delete("chat");const state={chatId:id||null};if(push)window.history.pushState(state,"",url);else window.history.replaceState(state,"",url)}
-  async function copyChatUrl(){if(!activeChatId){notify("Send a message first to create a chat link.");return}const url=new URL(location.href);url.searchParams.set("chat",activeChatId);try{await navigator.clipboard.writeText(url.href);notify("Chat link copied.");}catch{window.prompt("Copy this chat link:",url.href)}}
+  async function copyChatUrl(){if(!activeChatId){notify("Send a message first to create a chat link.");return}const url=new URL(location.href);url.searchParams.set("chat",activeChatId);try{await navigator.clipboard.writeText(url.href);notify("Chat link copied. It opens only where this account's chat history is available.");}catch{window.prompt("Copy this chat link:",url.href)}}
   function saveCurrentChat(){
     if(!history.length)return;
     let chat=currentChat();
     if(!chat){chat={id:newId(),ownerScope:currentChatScope(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id;setChatUrl(chat.id,true)}
     chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
     chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
-    if(cloudReady) cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})}).catch(()=>notify("Cloud save failed; local copy kept."));
+    if(cloudReady&&chat.ownerScope===currentChatScope()) cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})}).catch(()=>notify("Cloud save failed; local copy kept."));
   }
   function renderChatList(){
     const list=document.querySelector("#chat-list");if(!list)return;list.replaceChildren();
     if(!chats.length){const empty=document.createElement("p");empty.className="history-empty";empty.textContent="Your saved chats will appear here.";list.append(empty);return}
-    chats.filter(chat=>chat.ownerScope===currentChatScope()).forEach(chat=>{const button=document.createElement("button");button.className="history-item"+(chat.id===activeChatId?" active":"");button.type="button";button.textContent=chat.title||"Untitled chat";button.title=button.textContent;button.addEventListener("click",()=>openChat(chat.id));list.append(button)});
+    chats.filter(chat=>chat.ownerScope===currentChatScope()||(currentChatScope()==="anonymous"&&chat.ownerScope==="legacy")).forEach(chat=>{const button=document.createElement("button");button.className="history-item"+(chat.id===activeChatId?" active":"");button.type="button";button.textContent=chat.title||"Untitled chat";button.title=button.textContent;button.addEventListener("click",()=>openChat(chat.id));list.append(button)});
   }
   function openChat(id){
     if(busy){notify("Wait for the current reply before switching chats.");return}
-    const chat=chats.find(item=>item.id===id&&item.ownerScope===currentChatScope());if(!chat)return;
+    const chat=chats.find(item=>item.id===id&&(item.ownerScope===currentChatScope()||(currentChatScope()==="anonymous"&&item.ownerScope==="legacy")));if(!chat)return;
     activeChatId=id;setChatUrl(id,true);history.splice(0,history.length,...chat.messages.map(m=>({role:m.role,content:m.content})));
     messages.replaceChildren();welcome.hidden=history.length>0;
     history.forEach(m=>addMessage(m.role,m.content));renderChatList();sidebar.classList.remove("open");
