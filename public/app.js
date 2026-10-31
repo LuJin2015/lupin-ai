@@ -11,7 +11,7 @@
   let clientId=localStorage.getItem(CLIENT_KEY);
   if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
   const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
-  const currentChatScope=()=>window.LupinAccount?.user?.id?"user:"+window.LupinAccount.user.id:"anonymous";
+  const currentChatScope=()=>window.LupinAccount?.token&&!window.LupinAccount?.user?"restoring":(window.LupinAccount?.user?.id?"user:"+window.LupinAccount.user.id:"anonymous");
   const tokensBackdrop=document.querySelector("#tokens-backdrop");
   let tokenSnapshot={used:0,dailyLimit:10000,credits:0};
   function tokenHeaders(){return {"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{})}}
@@ -251,6 +251,8 @@
   attachButton?.addEventListener("click",()=>fileInput.click());
   fileInput?.addEventListener("change",async()=>{const selected=Array.from(fileInput.files||[]);fileInput.value="";if(pendingFiles.length+selected.length>5){notify("Attach up to 5 files per message.");return}for(const file of selected){try{const ready=await prepareAttachment(file);pendingFiles.push(ready)}catch(error){notify(error.message||"Could not attach file.")}}renderAttachments()});
   async function sendMessage(raw,files=[]){
+    if(window.LupinAccount?.ready){try{await window.LupinAccount.ready}catch{}}
+    if(currentChatScope()==="restoring"){notify("Your Lupin account is still being checked. Try sending again in a moment.");return}
     const text=raw.trim();if((!text&&!files.length)||busy)return;
     const officeText=files.filter(f=>f.extractedText).map(f=>"\n\n[Attached Office file: "+f.name+"]\n"+f.extractedText).join("");
     const imageLabels=files.filter(f=>f.imageData).map(f=>"[Attached image: "+f.name+"]").join("\n");
@@ -276,6 +278,7 @@
   let accountScopeReady=false;
   async function activateCurrentScope(){
     const scope=currentChatScope();
+    if(scope==="restoring"){cloudReady=false;renderChatList();return}
     if(activeChatId&&!chats.some(chat=>chat.id===activeChatId&&chat.ownerScope===scope)){
       activeChatId=null;history.length=0;messages.replaceChildren();welcome.hidden=false;setChatUrl(null); 
     }
