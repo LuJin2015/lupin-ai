@@ -132,8 +132,8 @@ async function readJsonLimited(request, maxBytes) {
   const declared=Number(request.headers.get("Content-Length")||0);
   if(Number.isFinite(declared)&&declared>maxBytes)throw Object.assign(new Error("Request body is too large."),{status:413});
   if(!request.body)throw Object.assign(new Error("Request body must be valid JSON."),{status:400});
-  const reader=request.body.getReader(),chunks=[];
-  let total=0;
+  const reader=request.body.getReader(),decoder=new TextDecoder();
+  let total=0,text="";
   try {
     while(true) {
       const part=await reader.read();
@@ -143,15 +143,13 @@ async function readJsonLimited(request, maxBytes) {
         try{await reader.cancel()}catch{}
         throw Object.assign(new Error("Request body is too large."),{status:413});
       }
-      chunks.push(part.value);
+      text+=decoder.decode(part.value,{stream:true});
     }
+    text+=decoder.decode();
   } finally {
     try{reader.releaseLock()}catch{}
   }
-  const bytes=new Uint8Array(total);
-  let offset=0;
-  for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
-  try{return JSON.parse(new TextDecoder().decode(bytes));}
+  try{return JSON.parse(text);}
   catch{throw Object.assign(new Error("Request body must be valid JSON."),{status:400});}
 }
 function validPublicUrl(raw) {
