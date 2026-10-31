@@ -452,9 +452,10 @@ export default {
           const now=Math.floor(Date.now()/1000);
           return json({id:"chatcmpl-"+crypto.randomUUID().replace(/-/g,""),object:"chat.completion",created:now,model:"lupin-ai",choices:[{index:0,message:{role:"assistant",content:reply},finish_reason:"stop"}],usage:{prompt_tokens:promptTokens,completion_tokens:completionTokens,total_tokens:totalTokens}},200,origin);
         } catch(error) {
-          await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();
-          console.error("OpenAI-compatible completion failed",error?.message||error);
-          return json({error:{message:"Cloudflare Workers AI could not complete the request.",type:"server_error"}},502,origin);
+          try{await env.DB.prepare("UPDATE lupin_token_usage SET used_tokens=MAX(0,used_tokens-?),updated_at=? WHERE owner_id=? AND usage_day=?").bind(reservation,Date.now(),"global:usage",day).run();}catch(refundError){console.error("Lupin token reservation refund failed",refundError?.message||String(refundError));}
+          const requestId=crypto.randomUUID();
+          console.error("OpenAI-compatible completion failed",JSON.stringify({requestId,name:error?.name||"Error",message:String(error?.message||error).slice(0,500),stack:String(error?.stack||"").slice(0,2000)}));
+          return json({error:{message:"Cloudflare Workers AI could not complete the request.",type:"server_error",request_id:requestId}},502,origin);
         }
       } catch(error) {
         console.error("OpenAI-compatible API failure",error?.message||error);
