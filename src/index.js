@@ -348,6 +348,8 @@ export default {
       const packages={"1000":{tokens:1000,miles:100},"5000":{tokens:5000,miles:400}};
       const chosen=packages[pack];
       if(!chosen||!airlineToken)return json({error:"Choose a token package and connect Lupin Airlines."},400,origin);
+      const owner="user:"+session.user.id;
+      let milesDebited=false;
       try{
         await ensureLupinTokenTables(env);
         const base="https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
@@ -359,17 +361,33 @@ export default {
         const debit=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:-chosen.miles})});
         const debitData=await debit.json().catch(()=>({}));
         if(!debit.ok)return json({error:debitData.error||"Could not deduct Lupin Miles. No tokens were added."},400,origin);
-        const owner="user:"+session.user.id,now=Date.now();
+        milesDebited=true;
+        const now=Date.now();
         try{
           await env.DB.prepare("INSERT INTO lupin_token_credits(owner_id,tokens,updated_at) VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET tokens=tokens+excluded.tokens,updated_at=excluded.updated_at").bind(owner,chosen.tokens,now).run();
         }catch(creditError){
-          try{await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:chosen.miles})})}catch{}
+          let refundConfirmed=false;
+          try{
+            const refund=await fetch(base+"/miles",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+airlineToken},body:JSON.stringify({delta:chosen.miles})});
+            refundConfirmed=refund.ok;
+          }catch(refundError){console.error("LupinTokens mileage refund failed",refundError?.message||String(refundError));}
+          const requestId=crypto.randomUUID();
+          console.error("LupinTokens purchase credit write failed",JSON.stringify({requestId,message:String(creditError?.message||creditError),refundConfirmed}));
+          if(!refundConfirmed)return json({error:"Miles were deducted but the automatic refund could not be confirmed. Do not retry this purchase. Contact the Lupin owner with reference "+requestId+".",requestId},503,origin);
+          milesDebited=false;
           throw creditError;
         }
-        const status=await getLupinTokenStatus(env,owner);
-        return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,...status},200,origin);
+        milesDebited=false;
+        try{
+          const status=await getLupinTokenStatus(env,owner);
+          return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,...status},200,origin);
+        }catch(statusError){
+          const requestId=crypto.randomUUID();
+          console.error("LupinTokens purchase succeeded but balance refresh failed",JSON.stringify({requestId,message:String(statusError?.message||statusError)}));
+          return json({ok:true,purchased:chosen.tokens,milesSpent:chosen.miles,balanceRefreshPending:true,requestId},200,origin);
+        }
       }catch(error){
-        console.error("LupinTokens purchase failed",error?.message||error);
+        console.error("LupinTokens purchase failed",JSON.stringify({message:String(error?.message||error),milesDebited}));
         return json({error:"Purchase could not be completed. Please try again."},503,origin);
       }
     }
