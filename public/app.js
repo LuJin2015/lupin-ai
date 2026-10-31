@@ -11,6 +11,7 @@
   let clientId=localStorage.getItem(CLIENT_KEY);
   if(!clientId){clientId="client_"+crypto.randomUUID().replace(/-/g,"");localStorage.setItem(CLIENT_KEY,clientId)}
   const cloudUrl=()=>HISTORY_URL+"?clientId="+encodeURIComponent(clientId);
+  const currentChatScope=()=>window.LupinAccount?.user?.id?"user:"+window.LupinAccount.user.id:"anonymous";
   const tokensBackdrop=document.querySelector("#tokens-backdrop");
   let tokenSnapshot={used:0,dailyLimit:10000,credits:0};
   function tokenHeaders(){return {"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{})}}
@@ -99,11 +100,14 @@
   async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
   let cloudReady=false;
   async function syncCloudHistory(){
+    const scope=currentChatScope();
     try{
       const data=await cloudRequest(cloudUrl());
       const cloudChats=Array.isArray(data.chats)?data.chats:[];
-      const cloudById=new Map(cloudChats.filter(chat=>chat&&typeof chat.id==="string"&&Array.isArray(chat.messages)).map(chat=>[chat.id,chat]));
-      const localById=new Map(chats.map(chat=>[chat.id,chat]));
+      const otherScopeChats=chats.filter(chat=>chat.ownerScope!==scope);
+      const localScopeChats=chats.filter(chat=>chat.ownerScope===scope);
+      const cloudById=new Map(cloudChats.filter(chat=>chat&&typeof chat.id==="string"&&Array.isArray(chat.messages)).map(chat=>[chat.id,{...chat,ownerScope:scope}]));
+      const localById=new Map(localScopeChats.map(chat=>[chat.id,chat]));
       const merged=new Map(localById);
       const uploads=[];
       for(const cloudChat of cloudById.values()){
@@ -114,7 +118,7 @@
         const remote=cloudById.get(local.id);
         if(!remote||Number(local.updated||0)>Number(remote.updated||0))uploads.push(local);
       }
-      chats=Array.from(merged.values()).sort((a,b)=>(Number(b.updated)||0)-(Number(a.updated)||0)).slice(0,50);
+      chats=[...otherScopeChats,...Array.from(merged.values())].sort((a,b)=>(Number(b.updated)||0)-(Number(a.updated)||0)).slice(0,50);
       saveChats();
       for(const chat of uploads){
         await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})});
@@ -130,19 +134,19 @@
       const value=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");
       if(!Array.isArray(value))return [];
       return value.filter(chat=>chat&&typeof chat.id==="string"&&/^[a-zA-Z0-9_-]{1,80}$/.test(chat.id)&&Array.isArray(chat.messages))
-        .map(chat=>({...chat,title:String(chat.title||"Untitled chat").slice(0,120),updated:Number(chat.updated)||0,messages:chat.messages.filter(m=>m&&["user","assistant"].includes(m.role)&&typeof m.content==="string").slice(-100).map(m=>({role:m.role,content:m.content.slice(0,6000)}))}))
+        .map(chat=>({...chat,ownerScope:chat.ownerScope==="anonymous"||/^user:[a-f0-9-]{36}$/i.test(chat.ownerScope||"")?chat.ownerScope:"legacy",title:String(chat.title||"Untitled chat").slice(0,120),updated:Number(chat.updated)||0,messages:chat.messages.filter(m=>m&&["user","assistant"].includes(m.role)&&typeof m.content==="string").slice(-100).map(m=>({role:m.role,content:m.content.slice(0,6000)}))}))
         .slice(0,50);
     }catch{return []}
   }
   function saveChats(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(chats.slice(0,50)))}catch{notify("Chat history could not be saved in this browser.")}}
   function newId(){return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8)}
-  function currentChat(){return chats.find(chat=>chat.id===activeChatId)}
+  function currentChat(){return chats.find(chat=>chat.id===activeChatId&&chat.ownerScope===currentChatScope())}
   function setChatUrl(id,push=false){const url=new URL(location.href);if(id)url.searchParams.set("chat",id);else url.searchParams.delete("chat");const state={chatId:id||null};if(push)window.history.pushState(state,"",url);else window.history.replaceState(state,"",url)}
   async function copyChatUrl(){if(!activeChatId){notify("Send a message first to create a chat link.");return}const url=new URL(location.href);url.searchParams.set("chat",activeChatId);try{await navigator.clipboard.writeText(url.href);notify("Chat link copied.");}catch{window.prompt("Copy this chat link:",url.href)}}
   function saveCurrentChat(){
     if(!history.length)return;
     let chat=currentChat();
-    if(!chat){chat={id:newId(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id;setChatUrl(chat.id,true)}
+    if(!chat){chat={id:newId(),ownerScope:currentChatScope(),title:(history.find(m=>m.role==="user")?.content||"New chat").replace(/\s+/g," ").slice(0,52),messages:[],updated:Date.now()};chats.unshift(chat);activeChatId=chat.id;setChatUrl(chat.id,true)}
     chat.messages=history.map(m=>({role:m.role,content:m.content}));chat.updated=Date.now();
     chats.sort((a,b)=>b.updated-a.updated);chats=chats.slice(0,50);saveChats();renderChatList();
     if(cloudReady) cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})}).catch(()=>notify("Cloud save failed; local copy kept."));
@@ -150,11 +154,11 @@
   function renderChatList(){
     const list=document.querySelector("#chat-list");if(!list)return;list.replaceChildren();
     if(!chats.length){const empty=document.createElement("p");empty.className="history-empty";empty.textContent="Your saved chats will appear here.";list.append(empty);return}
-    chats.forEach(chat=>{const button=document.createElement("button");button.className="history-item"+(chat.id===activeChatId?" active":"");button.type="button";button.textContent=chat.title||"Untitled chat";button.title=button.textContent;button.addEventListener("click",()=>openChat(chat.id));list.append(button)});
+    chats.filter(chat=>chat.ownerScope===currentChatScope()).forEach(chat=>{const button=document.createElement("button");button.className="history-item"+(chat.id===activeChatId?" active":"");button.type="button";button.textContent=chat.title||"Untitled chat";button.title=button.textContent;button.addEventListener("click",()=>openChat(chat.id));list.append(button)});
   }
   function openChat(id){
     if(busy){notify("Wait for the current reply before switching chats.");return}
-    const chat=chats.find(item=>item.id===id);if(!chat)return;
+    const chat=chats.find(item=>item.id===id&&item.ownerScope===currentChatScope());if(!chat)return;
     activeChatId=id;setChatUrl(id,true);history.splice(0,history.length,...chat.messages.map(m=>({role:m.role,content:m.content})));
     messages.replaceChildren();welcome.hidden=history.length>0;
     history.forEach(m=>addMessage(m.role,m.content));renderChatList();sidebar.classList.remove("open");
@@ -254,8 +258,32 @@
   window.addEventListener("popstate",()=>{if(busy){notify("Wait for the current reply before navigating between chats.");return}const id=new URLSearchParams(location.search).get("chat");if(id&&chats.some(c=>c.id===id))openChat(id);else if(!id){activeChatId=null;history.length=0;messages.replaceChildren();welcome.hidden=false;renderChatList()}});
   document.querySelector("#share-chat")?.addEventListener("click",copyChatUrl);
   document.querySelector("#menu").addEventListener("click",()=>sidebar.classList.toggle("open"));
-  window.addEventListener("lupin-account-changed",()=>{refreshLupinTokens();cloudReady=false;syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});});
-  renderChatList();
-  refreshLupinTokens();
-  syncCloudHistory().then(()=>{const requested=new URLSearchParams(location.search).get("chat");if(requested&&chats.some(c=>c.id===requested))openChat(requested);else if(!history.length&&chats.length)openChat(chats[0].id)});
+  let accountScopeReady=false;
+  async function activateCurrentScope(){
+    const scope=currentChatScope();
+    if(activeChatId&&!chats.some(chat=>chat.id===activeChatId&&chat.ownerScope===scope)){
+      activeChatId=null;history.length=0;messages.replaceChildren();welcome.hidden=false;setChatUrl(null); 
+    }
+    cloudReady=false;
+    await syncCloudHistory();
+    const requested=new URLSearchParams(location.search).get("chat");
+    if(requested&&chats.some(chat=>chat.id===requested&&chat.ownerScope===scope))openChat(requested);
+    else if(!history.length){
+      const newest=chats.find(chat=>chat.ownerScope===scope);
+      if(newest)openChat(newest.id);
+      else{activeChatId=null;setChatUrl(null);messages.replaceChildren();welcome.hidden=true;}
+    }
+    renderChatList();
+  }
+  window.addEventListener("lupin-account-changed",()=>{
+    refreshLupinTokens();
+    if(accountScopeReady)activateCurrentScope();
+  });
+  const accountReady=window.LupinAccount?.ready||Promise.resolve();
+  Promise.resolve(accountReady).catch(()=>{}).finally(()=>{
+    accountScopeReady=true;
+    renderChatList();
+    refreshLupinTokens();
+    activateCurrentScope();
+  });
 })();
