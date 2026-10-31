@@ -172,7 +172,7 @@ async function getWebContext(env, prompt) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && url.pathname !== "/api/tokens" && url.pathname !== "/api/tokens/purchase" && !url.pathname.startsWith("/api/auth/")) return env.ASSETS.fetch(request);
+    if (url.pathname !== "/api/chat" && url.pathname !== "/api/chats" && url.pathname !== "/api/tokens" && url.pathname !== "/api/tokens/purchase" && url.pathname !== "/api/keys" && !url.pathname.startsWith("/api/keys/") && !url.pathname.startsWith("/api/auth/") && !url.pathname.startsWith("/v1/")) return env.ASSETS.fetch(request);
     const origin = request.headers.get("Origin") || "";
     if (request.method === "OPTIONS") {
       if (origin !== ALLOWED_ORIGIN) return new Response(null, { status: 403 });
