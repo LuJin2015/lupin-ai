@@ -253,6 +253,7 @@
   async function sendMessage(raw,files=[]){
     if(window.LupinAccount?.ready){try{await window.LupinAccount.ready}catch{}}
     if(currentChatScope()==="restoring"){notify("Your Lupin account is still being checked. Try sending again in a moment.");return}
+    const requestScope=currentChatScope();
     const text=raw.trim();if((!text&&!files.length)||busy)return;
     const officeText=files.filter(f=>f.extractedText).map(f=>"\n\n[Attached Office file: "+f.name+"]\n"+f.extractedText).join("");
     const imageLabels=files.filter(f=>f.imageData).map(f=>"[Attached image: "+f.name+"]").join("\n");
@@ -263,9 +264,10 @@
       const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
+      if(requestScope!==currentChatScope()){notify("Your account changed while this reply was processing. It was not added to the new account's chat history.");return;}
       history.push({role:"assistant",content:data.reply});addMessage("assistant",data.reply);saveCurrentChat();refreshLupinTokens();
     }catch(error){thinking.remove();notify(error.message||"Something went wrong. Try again.")}
-    finally{busy=false;send.disabled=false;send.textContent="↑";input.disabled=false;input.focus()}
+    finally{busy=false;send.disabled=false;send.textContent="↑";input.disabled=false;input.focus();if(requestScope!==currentChatScope())activateCurrentScope()}
   }
   form.addEventListener("submit",e=>{e.preventDefault();sendMessage(input.value,pendingFiles.slice())});
   input.addEventListener("input",()=>{input.style.height="auto";input.style.height=Math.min(input.scrollHeight,180)+"px"});
