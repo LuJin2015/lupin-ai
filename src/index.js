@@ -20,6 +20,7 @@ const MAX_BODY = 32 * 1024 * 1024;
 const MAX_API_BODY = 512 * 1024;
 const MAX_WEB_CONTEXT = 16000;
 const MAX_CHAT_MESSAGE = 50000;
+const WEB_CONTEXT_RESERVE_TOKENS = 4000;
 const SESSION_DAYS = 30;
 
 const DEFAULT_LUPIN_TOKEN_LIMIT = 10000;
@@ -73,6 +74,13 @@ async function refundLupinUsagePair(env, owner, day, amount) {
   ]);
 }
 
+function estimateTextTokens(value) {
+  let estimate=0;
+  for(const character of String(value||"")) {
+    estimate += character.codePointAt(0)<=0x7f ? 0.25 : 1;
+  }
+  return Math.ceil(estimate);
+}
 const encoder = new TextEncoder();
 function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,""); }
 async function digest(text) { return b64(await crypto.subtle.digest("SHA-256", encoder.encode(text))); }
@@ -424,14 +432,16 @@ export default {
         const owner="user:"+keyRow.owner_id,day=new Date().toISOString().slice(0,10);
         await ensureLupinTokenTables(env);
         const status=await getLupinTokenStatus(env,owner);
-        const inputEstimate=Math.ceil(messages.reduce((n,m)=>n+m.content.length,0)/4);
+        const inputEstimate=estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n"));
         const outputLimit=Math.min(1200,requestedOutput);
         if(status.globalUsed+inputEstimate+outputLimit>status.globalLimit)return json({error:{message:"Lupin AI has reached its shared daily safety cap. Try again after the daily reset.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
         if(status.used+inputEstimate+outputLimit>status.dailyLimit+status.credits)return json({error:{message:"Your LupinTokens allowance is exhausted. Try again after the daily reset or purchase more LupinTokens.",type:"rate_limit_error",code:"lupin_tokens_limit"}},429,origin);
         const reservation=inputEstimate+outputLimit;
         const userReserved=await reserveLupinUsage(env,owner,day,reservation,status.dailyLimit+status.credits);
         if(!userReserved)return json({error:{message:"Your LupinTokens allowance is exhausted. Try again after the daily reset or purchase more LupinTokens.",type:"rate_limit_error",code:"lupin_tokens_limit"}},429,origin);
-        const globalReserved=await reserveLupinUsage(env,"global:usage",day,reservation,HARD_GLOBAL_DAILY_TOKEN_CAP);
+        let globalReserved=false;
+        try{globalReserved=await reserveLupinUsage(env,"global:usage",day,reservation,HARD_GLOBAL_DAILY_TOKEN_CAP);}
+        catch(error){await refundLupinUsage(env,owner,day,reservation);throw error;}
         if(!globalReserved){
           await refundLupinUsage(env,owner,day,reservation);
           return json({error:{message:"Lupin AI has reached its shared daily safety cap.",type:"rate_limit_error",code:"lupin_global_limit"}},429,origin);
@@ -450,8 +460,13 @@ export default {
             const completionId="chatcmpl-"+crypto.randomUUID().replace(/-/g,""),created=Math.floor(Date.now()/1000);
             const streamHeaders={"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no","Vary":"Origin"};
             if(origin===ALLOWED_ORIGIN){streamHeaders["Access-Control-Allow-Origin"]=ALLOWED_ORIGIN;streamHeaders["Access-Control-Allow-Methods"]="GET, POST, DELETE, OPTIONS";streamHeaders["Access-Control-Allow-Headers"]="Content-Type, Authorization";}
-            let settled=false,cancelled=false;
-            const releaseReservation=async()=>{if(!settled){settled=true;await refundLupinUsagePair(env,owner,day,reservation);}};
+            let settled=false,cancelled=false,settlementPromise=null;
+            const releaseReservation=async()=>{
+              if(settlementPromise) {
+                try{await settlementPromise;settled=true;return;}catch{}
+              }
+              if(!settled){settled=true;await refundLupinUsagePair(env,owner,day,reservation);}
+            };
             const stream=new ReadableStream({
               async start(controller){
                 const send=(payload)=>{if(!cancelled)controller.enqueue(encoder.encode("data: "+JSON.stringify(payload)+"\n\n"));};
@@ -487,8 +502,9 @@ export default {
                   }
                   if(cancelled)throw new Error("The client cancelled the stream.");
                   if(!fullReply.trim())throw new Error("The model returned an empty response.");
-                  const completionTokens=Math.max(1,Math.ceil(fullReply.length/4)),totalTokens=inputEstimate+completionTokens;
-                  await adjustLupinUsagePair(env,owner,day,reservation,totalTokens);
+                  const completionTokens=Math.max(1,estimateTextTokens(fullReply)),totalTokens=inputEstimate+completionTokens;
+                  settlementPromise=adjustLupinUsagePair(env,owner,day,reservation,totalTokens);
+                  await settlementPromise;
                   settled=true;
                   const statusAfter=await getLupinTokenStatus(env,owner),creditOverage=Math.max(0,statusAfter.used-statusAfter.dailyLimit);
                   if(creditOverage>0)await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(totalTokens,creditOverage),Date.now(),owner).run();
@@ -675,8 +691,10 @@ export default {
         if(!tokenOwner)return json({error:"A valid client ID or Lupin Cloud sign-in is required."},400,origin);
         if(tokenOwner){
           tokenLimitStatus=await getLupinTokenStatus(env,tokenOwner);
-          tokenEstimate=Math.ceil(messages.reduce((sum,m)=>sum+m.content.length,0)/4)+images.length*768;
-          const expectedOutput=Math.min(1200,Math.max(150,Math.ceil(tokenEstimate*0.6)));
+          const latestText=[...messages].reverse().find(m=>m.role==="user")?.content||"";
+          const wantsWeb=/\b(browse|search|find|look up|visit|open|read|summari[sz]e|scrape|crawl|look at|check this (?:site|page|url)|research this page)\b/i.test(latestText);
+          tokenEstimate=estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n"))+images.length*1024+(wantsWeb?WEB_CONTEXT_RESERVE_TOKENS:0);
+          const expectedOutput=1200;
           if(tokenLimitStatus.globalUsed+tokenEstimate+expectedOutput>tokenLimitStatus.globalLimit){
             return json({error:"Lupin AI has reached its shared daily safety cap. This protects the Cloudflare AI budget for everyone; try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
           }
@@ -688,7 +706,9 @@ export default {
           const userReserved=await reserveLupinUsage(env,tokenOwner,tokenDay,ownerReservation,tokenLimitStatus.dailyLimit+tokenLimitStatus.credits);
           if(!userReserved){ownerReservation=0;return json({error:"You've used your daily LupinTokens allowance and purchased credits. Buy more LupinTokens with Lupin Miles or try again after the daily reset.",lupinTokens:await getLupinTokenStatus(env,tokenOwner)},429,origin);}
           globalReservation=ownerReservation;
-          const globalReserved=await reserveLupinUsage(env,"global:usage",tokenDay,globalReservation,HARD_GLOBAL_DAILY_TOKEN_CAP);
+              let globalReserved=false;
+          try{globalReserved=await reserveLupinUsage(env,"global:usage",tokenDay,globalReservation,HARD_GLOBAL_DAILY_TOKEN_CAP);}
+          catch(error){await refundLupinUsage(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;throw error;}
           if(!globalReserved){await refundLupinUsage(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;return json({error:"Lupin AI has reached its shared daily safety cap. Try again after the daily reset.",lupinTokens:await getLupinTokenStatus(env,tokenOwner)},429,origin);}
         }
       }catch(error){
@@ -714,15 +734,13 @@ export default {
       const result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
       const reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content;
       if (typeof reply !== "string" || !reply.trim()) {
-        if(ownerReservation>0){await refundLupinUsage(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;}
-        if(globalReservation>0){await refundLupinUsage(env,"global:usage",tokenDay,globalReservation);globalReservation=0;}
+        if(ownerReservation>0){await refundLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;}
         return json({ error: "The model returned an empty response. Try again." }, 502, origin);
       }
       let lupinTokens=null;
       if(tokenOwner){
-        const charged=Math.max(1,Math.ceil((messages.reduce((sum,m)=>sum+m.content.length,0)+reply.length)/4)+images.length*768);
-        if(ownerReservation>0){await adjustLupinUsage(env,tokenOwner,tokenDay,ownerReservation,charged);ownerReservation=0;}
-        if(globalReservation>0){await adjustLupinUsage(env,"global:usage",tokenDay,globalReservation,charged);globalReservation=0;}
+        const charged=Math.max(1,estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n")+"\n"+webContext+"\n"+reply)+images.length*1024);
+        if(ownerReservation>0){await adjustLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation,charged);ownerReservation=0;globalReservation=0;}
         const statusBefore=await getLupinTokenStatus(env,tokenOwner);
         const excess=Math.max(0,statusBefore.used-statusBefore.dailyLimit);
         if(excess>0) await env.DB.prepare("UPDATE lupin_token_credits SET tokens=MAX(0,tokens-?),updated_at=? WHERE owner_id=?").bind(Math.min(charged,excess),Date.now(),tokenOwner).run();
@@ -731,8 +749,8 @@ export default {
       }
       return json({ reply, model, browsed: Boolean(webContext && !webContext.startsWith("WEB BROWSING ERROR:")), ...(lupinTokens?{lupinTokens}:{}) }, 200, origin);
     } catch(error) {
-      if(ownerReservation>0){try{await refundLupinUsage(env,tokenOwner,tokenDay,ownerReservation)}catch(refundError){console.error("Lupin user quota refund failed",refundError?.message||String(refundError));}}
-      if(globalReservation>0){try{await refundLupinUsage(env,"global:usage",tokenDay,globalReservation)}catch(refundError){console.error("Lupin global quota refund failed",refundError?.message||String(refundError));}}
+      if(ownerReservation>0){try{await refundLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation)}catch(refundError){console.error("Lupin quota refund failed",refundError?.message||String(refundError));}}
+      else if(globalReservation>0){try{await refundLupinUsage(env,"global:usage",tokenDay,globalReservation)}catch(refundError){console.error("Lupin global quota refund failed",refundError?.message||String(refundError));}}
       const requestId=crypto.randomUUID();
       console.error("Website completion failed",JSON.stringify({requestId,name:error?.name||"Error",message:String(error?.message||error).slice(0,500),stack:String(error?.stack||"").slice(0,2000)}));
       return json({error:"Cloudflare Workers AI could not complete the request. Check Workers Logs for request ID "+requestId+".",requestId},502,origin);
