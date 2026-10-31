@@ -45,3 +45,15 @@
 .tokens-hint{font-size:10px;color:#858d7b;line-height:1.65}
 .tokens-error{font-size:11px;color:#ff9c8e;min-height:15px;line-height:1.5}
 @media(max-width:760px){.tokens-open{padding:7px 8px;font-size:10px}.topbar{gap:7px}.tokens-dialog{padding:24px}}
+
+/* OpenAI-compatible API key manager */
+.api-key-list{display:flex;flex-direction:column;gap:9px;margin:16px 0;max-height:240px;overflow:auto}
+.api-key-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;background:#20251a;border:1px solid #343d2b;border-radius:11px}
+.api-key-details{display:flex;flex-direction:column;gap:5px;min-width:0}
+.api-key-details b{font-size:12px;color:#e5f6c1}
+.api-key-details small{font-size:10px;color:#9aa28e;overflow-wrap:anywhere}
+.api-key-revoke{flex:none;border:1px solid #68433d;border-radius:8px;background:#2a1d1a;color:#ffad9e;padding:7px 9px;font-size:10px}
+.api-key-revoke:disabled{opacity:.5}
+#api-key-created{padding:12px;margin:12px 0;background:#20251a;border:1px solid #566b36;border-radius:11px;overflow-wrap:anywhere}
+#api-key-created[hidden]{display:none}
+@media(max-width:760px){.api-key-row{align-items:flex-start}.api-key-revoke{padding:7px}}
