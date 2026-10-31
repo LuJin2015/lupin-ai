@@ -88,6 +88,12 @@ function estimateTextTokens(value) {
   return Math.ceil(estimate);
 }
 const encoder = new TextEncoder();
+function constantTimeEqual(left,right) {
+  const a=encoder.encode(String(left??"")),b=encoder.encode(String(right??""));
+  let difference=a.length^b.length;
+  for(let i=0;i<Math.max(a.length,b.length);i++)difference|=(a[i]||0)^(b[i]||0);
+  return difference===0;
+}
 function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,""); }
 async function digest(text) { return b64(await crypto.subtle.digest("SHA-256", encoder.encode(text))); }
 function passwordHash(password, salt) {
@@ -282,13 +288,13 @@ export default {
           let row=await env.DB.prepare("SELECT id,username,password_hash,created_at FROM lupin_accounts WHERE username=? COLLATE NOCASE").bind(username).first();
           if(row){
             const parts=String(row.password_hash||"").split("$");
-            if(parts.length!==2||await cloudPasswordHash(password,parts[0])!==parts[1])return json({error:"Username or password is incorrect."},401,origin);
+            if(parts.length!==2||!constantTimeEqual(await cloudPasswordHash(password,parts[0]),parts[1]))return json({error:"Username or password is incorrect."},401,origin);
           } else {
             // Migrate a legacy Lupin AI account after a successful old-password check.
             const legacy=await env.DB.prepare("SELECT id,username,password_salt,password_hash,created_at FROM lupin_ai_users WHERE username=? COLLATE NOCASE").bind(username).first();
             if(!legacy)return json({error:"Username or password is incorrect."},401,origin);
             const legacyHash=passwordHash(password,legacy.password_salt);
-            if(legacyHash!==legacy.password_hash)return json({error:"Username or password is incorrect."},401,origin);
+            if(!constantTimeEqual(legacyHash,legacy.password_hash))return json({error:"Username or password is incorrect."},401,origin);
             const salt=crypto.randomUUID(),hash=await cloudPasswordHash(password,salt),created=new Date(Number(legacy.created_at)||Date.now()).toISOString();
             await env.DB.prepare("INSERT INTO lupin_accounts(id,username,password_hash,created_at) VALUES(?,?,?,?)").bind(legacy.id,legacy.username,salt+"$"+hash,created).run();
             row={id:legacy.id,username:legacy.username,password_hash:salt+"$"+hash,created_at:created};
