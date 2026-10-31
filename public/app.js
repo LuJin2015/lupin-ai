@@ -97,12 +97,13 @@
     finally{button.disabled=false}
   });
 
-  async function cloudRequest(url,options={}){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(window.LupinAccount?.token?{Authorization:"Bearer "+window.LupinAccount.token}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
-  let cloudReady=false;
+  async function cloudRequest(url,options={},authToken=window.LupinAccount?.token||""){const response=await fetch(url,{...options,headers:{"Content-Type":"application/json",...(authToken?{Authorization:"Bearer "+authToken}:{}),...(options.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Cloud history request failed");return data}
+  let cloudReady=false,historySyncGeneration=0;
   async function syncCloudHistory(){
-    const scope=currentChatScope();
+    const scope=currentChatScope(),authToken=window.LupinAccount?.token||"",generation=++historySyncGeneration;
     try{
-      const data=await cloudRequest(cloudUrl());
+      const data=await cloudRequest(cloudUrl(),{},authToken);
+      if(generation!==historySyncGeneration||scope!==currentChatScope())return;
       const cloudChats=Array.isArray(data.chats)?data.chats:[];
       if(scope.startsWith("user:")){
         let migrated=false;
@@ -126,10 +127,13 @@
       chats=[...otherScopeChats,...Array.from(merged.values())].sort((a,b)=>(Number(b.updated)||0)-(Number(a.updated)||0)).slice(0,50);
       saveChats();
       for(const chat of uploads){
-        await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})});
+        if(generation!==historySyncGeneration||scope!==currentChatScope())return;
+        await cloudRequest(cloudUrl(),{method:"POST",body:JSON.stringify({id:chat.id,title:chat.title,messages:chat.messages})},authToken);
       }
-      cloudReady=true;renderChatList();
-    }catch(error){cloudReady=false;notify("Cloud history unavailable; your local copy is kept on this device.")}
+      if(generation===historySyncGeneration&&scope===currentChatScope()){cloudReady=true;renderChatList();}
+    }catch(error){
+      if(generation===historySyncGeneration){cloudReady=false;notify("Cloud history unavailable; your local copy is kept on this device.")}
+    }
   }
   const history=[]; let busy=false, toastTimer;
   const STORAGE_KEY="lupin-ai-chat-history-v1";
