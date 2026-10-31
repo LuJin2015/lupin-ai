@@ -18,6 +18,7 @@ When WEB SOURCES are supplied, use them to answer the user's question and includ
 const ALLOWED_ORIGIN = "https://lujin2015.github.io";
 const MAX_BODY = 32 * 1024 * 1024;
 const MAX_API_BODY = 512 * 1024;
+const MAX_WEB_CONTEXT = 16000;
 const MAX_CHAT_MESSAGE = 50000;
 const SESSION_DAYS = 30;
 
@@ -44,10 +45,6 @@ async function getLupinTokenStatus(env, owner) {
     env.DB.prepare("SELECT used_tokens FROM lupin_token_usage WHERE owner_id=? AND usage_day=?").bind("global:usage",day).first()
   ]);
   return {used:Number(usage?.used_tokens)||0,dailyLimit:Number(budget?.daily_limit)||DEFAULT_LUPIN_TOKEN_LIMIT,credits:Number(credits?.tokens)||0,globalUsed:Number(globalUsage?.used_tokens)||0,globalLimit:HARD_GLOBAL_DAILY_TOKEN_CAP,day};
-}
-async function chargeLupinTokens(env, owner, day, amount) {
-  const now=Date.now();
-  await env.DB.prepare("INSERT INTO lupin_token_usage (owner_id,usage_day,used_tokens,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,usage_day) DO UPDATE SET used_tokens=used_tokens+excluded.used_tokens,updated_at=excluded.updated_at").bind(owner,day,amount,now).run();
 }
 async function reserveLupinUsage(env, owner, day, amount, limit) {
   const result=await env.DB.prepare("INSERT INTO lupin_token_usage (owner_id,usage_day,used_tokens,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,usage_day) DO UPDATE SET used_tokens=used_tokens+excluded.used_tokens,updated_at=excluded.updated_at WHERE lupin_token_usage.used_tokens+excluded.used_tokens<=?").bind(owner,day,amount,Date.now(),limit).run();
@@ -625,6 +622,7 @@ export default {
       try{
         await ensureLupinTokenTables(env);
         tokenOwner=getLupinTokenOwner(await sessionUser(request,env),body.clientId);
+        if(!tokenOwner)return json({error:"A valid client ID or Lupin Cloud sign-in is required."},400,origin);
         if(tokenOwner){
           tokenLimitStatus=await getLupinTokenStatus(env,tokenOwner);
           tokenEstimate=Math.ceil(messages.reduce((sum,m)=>sum+m.content.length,0)/4)+images.length*768;
@@ -661,7 +659,7 @@ export default {
           ...images.map(image => ({ type: "image_url", image_url: { url: image.data } }))
         ];
       }
-      if (webContext) promptMessages.push({ role: "user", content: webContext.slice(0, MAX_BODY) });
+      if (webContext) promptMessages.push({ role: "user", content: webContext.slice(0, MAX_WEB_CONTEXT) });
       const model = images.length ? VISION_MODEL : MODEL;
       const result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
       const reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content;
