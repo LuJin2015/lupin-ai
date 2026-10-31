@@ -104,6 +104,11 @@
     try{
       const data=await cloudRequest(cloudUrl());
       const cloudChats=Array.isArray(data.chats)?data.chats:[];
+      if(scope.startsWith("user:")){
+        let migrated=false;
+        for(const chat of chats)if(chat.ownerScope==="legacy"){chat.ownerScope=scope;migrated=true;}
+        if(migrated)saveChats();
+      }
       const otherScopeChats=chats.filter(chat=>chat.ownerScope!==scope);
       const localScopeChats=chats.filter(chat=>chat.ownerScope===scope);
       const cloudById=new Map(cloudChats.filter(chat=>chat&&typeof chat.id==="string"&&Array.isArray(chat.messages)).map(chat=>[chat.id,{...chat,ownerScope:scope}]));
