@@ -5,7 +5,8 @@
   "description": "Lupin AI chat app powered by Cloudflare Workers AI",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "check": "node --check src/index.js && node --check public/app.js && node --check public/account.js && node --check public/airline.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
