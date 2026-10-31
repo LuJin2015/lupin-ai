@@ -36,3 +36,36 @@ Never commit or share your Cloudflare API token.
 
 The application, the underlying model, and third-party components have distinct origins and may be subject to different licenses and rights. Consult the relevant model and provider documentation for applicable terms.
 
+## OpenAI-compatible API
+
+Lupin AI can issue account-bound API keys for applications that use the OpenAI SDK.
+
+1. Open the Lupin AI website and sign in with your Lupin Cloud account.
+2. Select **API keys** in the top bar, enter a label, and create a key.
+3. Copy the key immediately. The full key is displayed only once. Lupin stores its SHA-256 hash, not the plaintext key.
+4. Use the key with the OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-lupin-YOUR_KEY",
+    base_url="https://lupin-ai.lujinsg.workers.dev/v1"
+)
+
+response = client.chat.completions.create(
+    model="lupin-ai",
+    messages=[{"role": "user", "content": "Hello from my app!"}]
+)
+print(response.choices[0].message.content)
+```
+
+### Supported endpoints
+
+- `GET /v1/models` — lists `lupin-ai` and `qwen3.8-27b`.
+- `POST /v1/chat/completions` — OpenAI-style chat completion request and response.
+- `GET /api/keys`, `POST /api/keys`, `DELETE /api/keys/{id}` — authenticated key management used by the website.
+
+The API currently supports non-streaming text chat. Set `stream: false` (or omit it). Streaming, tools/function calling, image inputs, and fine-tuning endpoints are not implemented. Both listed model IDs route to Lupin AI's configured Cloudflare Workers AI model.
+
+API calls use the same per-account LupinTokens allowance and shared daily safety cap as the Lupin AI website. API keys are tied to the account that created them, can be revoked from the API keys panel, and are limited to 10 active keys per account. Treat keys like passwords: never put them in browser code, public repositories, or shared screenshots. If a key is exposed, revoke it and create another.
