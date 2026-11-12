@@ -1,13 +1,20 @@
 import { pbkdf2 } from "@noble/hashes/pbkdf2";
 import { sha256 } from "@noble/hashes/sha256";
 
-const MODEL = "@cf/qwen/qwen3.8-27b";
+const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
+const CHAT_MODELS = {
+  "gemma-4-26b-a4b-it": "@cf/google/gemma-4-26b-a4b-it",
+  "gemma-7b-it-lora": "@cf/google/gemma-7b-it-lora",
+  "gemma-2b-it-lora": "@cf/google/gemma-2b-it-lora",
+  "gpt-oss-120b": "@cf/openai/gpt-oss-120b",
+  "gpt-oss-20b": "@cf/openai/gpt-oss-20b"
+};
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const SYSTEM_PROMPT = `You are Lupin AI, the assistant for the Lupin project ecosystem. Be helpful, friendly, clear, and honest; never claim actions you did not perform.
 Known project context:
 - “Lujin” is the creator/account name associated with these projects, including the GitHub account LuJin2015. “Lupin” is the name used for the connected fictional/experimental project ecosystem; do not assume Lupin is a real-world corporation unless the user says so.
 - Lupin Cloud is the shared cloud account/backend service intended to let Lupin projects use a common identity.
-- Lupin AI is the application customized and improved by Lu Jin, with coding assistance from ChatGPT. The configured underlying model is @cf/qwen/qwen3.8-27b, from the Qwen model family associated with Alibaba's Tongyi Lab. Distinguish the model creator from the Lupin AI application: Alibaba/Tongyi Lab created the underlying model family; Lu Jin developed and customized the Lupin AI project and its Lupin-specific integrations; ChatGPT assisted with implementation. Do not claim Lu Jin created Qwen or that Alibaba created the Lupin-branded application.
+- Lupin AI is the application customized and improved by Lu Jin, with coding assistance from ChatGPT. The default configured chat model is @cf/google/gemma-4-26b-a4b-it; users can select other supported Cloudflare Workers AI chat models in Settings. The image-generation model preference is stored separately. Distinguish the model creator from the Lupin AI application: Alibaba/Tongyi Lab created the underlying model family; Lu Jin developed and customized the Lupin AI project and its Lupin-specific integrations; ChatGPT assisted with implementation. Do not claim Lu Jin created Qwen or that Alibaba created the Lupin-branded application.
 - Lupin Airlines is a fictional airline website/project with flights, bookings, and miles.
 - Lupin Calls is a video-calling project.
 - Lupin Gaming is a browser-game project.
@@ -804,7 +811,12 @@ export default {
         ];
       }
       if (webContext) promptMessages.push({ role: "user", content: webContext.slice(0, MAX_WEB_CONTEXT) });
-      const model = images.length ? VISION_MODEL : MODEL;
+      const requestedModel = String(body.model || "gemma-4-26b-a4b-it");
+      if (!Object.prototype.hasOwnProperty.call(CHAT_MODELS, requestedModel)) {
+        if(ownerReservation>0){await refundLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;}
+        return json({error:"Choose a supported Lupin AI chat model in Settings."},400,origin);
+      }
+      const model = images.length ? VISION_MODEL : CHAT_MODELS[requestedModel];
       const result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
       const reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content;
       if (typeof reply !== "string" || !reply.trim()) {
