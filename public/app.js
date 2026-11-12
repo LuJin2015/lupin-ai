@@ -269,22 +269,39 @@
   async function extractOfficeText(file){
     const ext=file.name.toLowerCase().split(".").pop();
     if(ext==="docx"){if(!window.mammoth)throw new Error("Word document reader is still loading. Try again in a moment.");const result=await window.mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()});return result.value.slice(0,8000)}
-    if(ext==="xlsx"||ext==="xls"){if(!window.XLSX)throw new Error("Excel document reader is still loading. Try again in a moment.");const book=window.XLSX.read(await file.arrayBuffer(),{type:"array"});return book.SheetNames.map(name=>"SHEET: "+name+"\n"+window.XLSX.utils.sheet_to_csv(book.Sheets[name])).join("\n\n").slice(0,8000)}
-    if(ext==="pptx"){if(!window.JSZip)throw new Error("PowerPoint document reader is still loading. Try again in a moment.");const zip=await window.JSZip.loadAsync(await file.arrayBuffer());const names=Object.keys(zip.files).filter(name=>/^ppt\/slides\/slide\d+\.xml$/.test(name)).sort((a,b)=>Number(a.match(/slide(\d+)/)[1])-Number(b.match(/slide(\d+)/)[1]));const slides=[];for(const name of names){const xml=await zip.files[name].async("text");const doc=new DOMParser().parseFromString(xml,"application/xml");slides.push("SLIDE "+name.match(/slide(\d+)/)[1]+"\n"+Array.from(doc.getElementsByTagName("a:t")).map(node=>node.textContent||"").join(" "))}return slides.join("\n\n").slice(0,8000)}
-    throw new Error("Unsupported file type. Use DOCX, XLSX/XLS, or PPTX (not legacy .doc or .ppt).");
+    if(ext==="xlsx"||ext==="xls"){if(!window.XLSX)throw new Error("Excel document reader is still loading. Try again in a moment.");const book=window.XLSX.read(await file.arrayBuffer(),{type:"array"});return book.SheetNames.map(name=>"SHEET: "+name+"\\n"+window.XLSX.utils.sheet_to_csv(book.Sheets[name])).join("\\n\\n").slice(0,8000)}
+    if(ext==="pptx"){if(!window.JSZip)throw new Error("PowerPoint document reader is still loading. Try again in a moment.");const zip=await window.JSZip.loadAsync(await file.arrayBuffer());const names=Object.keys(zip.files).filter(name=>/^ppt\\/slides\\/slide\\d+\\.xml$/.test(name)).sort((a,b)=>Number(a.match(/slide(\\d+)/)[1])-Number(b.match(/slide(\\d+)/)[1]));const slides=[];for(const name of names){const xml=await zip.files[name].async("text");const doc=new DOMParser().parseFromString(xml,"application/xml");slides.push("SLIDE "+name.match(/slide(\\d+)/)[1]+"\\n"+Array.from(doc.getElementsByTagName("a:t")).map(node=>node.textContent||"").join(" "))}return slides.join("\\n\\n").slice(0,8000)}
+    throw new Error("Unsupported Office document. Supported formats: DOCX, XLSX, XLS and PPTX.");
   }
+  const TEXT_EXTENSIONS=new Set([
+    "txt","text","md","markdown","mdx","rst","adoc","in","out","log","csv","tsv",
+    "java","py","pyw","pyi","js","jsx","mjs","cjs","ts","tsx","html","htm","css","scss","sass","less",
+    "json","jsonc","jsonl","xml","svg","yaml","yml","toml","ini","cfg","conf","properties",
+    "c","h","cc","cpp","cxx","hpp","hh","cs","go","rs","rb","php","swift","kt","kts","dart",
+    "sh","bash","zsh","fish","bat","cmd","ps1","sql","graphql","gql","proto","r","R","tex",
+    "vue","svelte","ipynb","gradle","tf","dockerfile","makefile","env","gitignore","dockerignore","editorconfig"
+  ]);
+  const TEXT_FILENAMES=new Set(["dockerfile","makefile","jenkinsfile","license","readme","changelog","authors","copying"]);
   async function prepareAttachment(file){
     const ext=file.name.toLowerCase().split(".").pop();
+    const lowerName=file.name.toLowerCase();
     const imageExtensions=["png","jpg","jpeg","webp"];
     const officeExtensions=["docx","xlsx","xls","pptx"];
-    if(!imageExtensions.includes(ext)&&!officeExtensions.includes(ext)){
-      throw new Error("Unsupported file: "+file.name+". Supported formats: PNG, JPG/JPEG, WebP, DOCX, XLSX, XLS and PPTX.");
+    const isText=TEXT_EXTENSIONS.has(ext)||TEXT_FILENAMES.has(lowerName)||file.type.startsWith("text/");
+    if(!imageExtensions.includes(ext)&&!officeExtensions.includes(ext)&&!isText){
+      throw new Error("Unsupported file: "+file.name+". Supported formats include PNG, JPG/JPEG, WebP, common text/code files (TXT, MD, IN, OUT, PY, JAVA, HTML, CSS, JS, TS, JSON, XML, YAML, etc.) and DOCX, XLSX, XLS, PPTX.");
     }
     if(imageExtensions.includes(ext)){
       const expectedType=ext==="png"?"image/png":ext==="webp"?"image/webp":"image/jpeg";
       if(file.type&&file.type!==expectedType)throw new Error(file.name+": the file extension and image format do not match. Use a valid PNG, JPEG or WebP image.");
       if(file.size>4*1024*1024)throw new Error(file.name+": images must be 4 MB or smaller.");
       return{name:file.name,type:expectedType,size:file.size,imageData:await readAsDataUrl(file),extractedText:""};
+    }
+    if(isText){
+      if(file.size>2*1024*1024)throw new Error(file.name+": text and code files must be 2 MB or smaller.");
+      const content=await file.text();
+      if(content.includes("\\u0000"))throw new Error(file.name+": this does not appear to be a text file.");
+      return{name:file.name,type:file.type||"text/plain",size:file.size,imageData:"",extractedText:content.slice(0,8000)};
     }
     if(file.size>10*1024*1024)throw new Error(file.name+": Office files must be 10 MB or smaller.");
     const extractedText=await extractOfficeText(file);
