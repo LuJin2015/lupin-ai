@@ -292,7 +292,7 @@
     welcome.hidden=true;addMessage("user",storedText);history.push({role:"user",content:storedText});saveCurrentChat();input.value="";input.style.height="auto";pendingFiles=[];renderAttachments();
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
-      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,model:selectedChatModel,imageModel:selectedImageModel,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
+      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,model:selectedChatModel,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
       if(requestScope!==currentChatScope()){notify("Your account changed while this reply was processing. It was not added to the new account's chat history.");return;}
