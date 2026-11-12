@@ -3,6 +3,32 @@
   const messages=document.querySelector("#messages"), welcome=document.querySelector("#welcome"), toast=document.querySelector("#toast"), sidebar=document.querySelector("#sidebar");
   const fileInput=document.querySelector("#file-input"), attachButton=document.querySelector("#attach-button"), attachmentList=document.querySelector("#attachment-list");
   let pendingFiles=[];
+  const CHAT_MODELS={"gemma-4-26b-a4b-it":{label:"Gemma 4 · 26B A4B"},"gemma-7b-it-lora":{label:"Gemma 7B · LoRA (Beta)"},"gemma-2b-it-lora":{label:"Gemma 2B · LoRA (Beta)"},"gpt-oss-120b":{label:"GPT-OSS · 120B"},"gpt-oss-20b":{label:"GPT-OSS · 20B"}};
+  const IMAGE_MODELS={"flux-2-klein-9b":{label:"FLUX.2 Klein · 9B"},"flux-2-klein-4b":{label:"FLUX.2 Klein · 4B"}};
+  const DEFAULT_CHAT_MODEL="gemma-4-26b-a4b-it",DEFAULT_IMAGE_MODEL="flux-2-klein-9b";
+  let selectedChatModel=DEFAULT_CHAT_MODEL,selectedImageModel=DEFAULT_IMAGE_MODEL;
+  const settingsKey=()=> "lupin-ai-model-settings-v1:"+(window.LupinAccount?.user?.id||clientId);
+  function loadModelSettings(){
+    try{const saved=JSON.parse(localStorage.getItem(settingsKey())||"{}");selectedChatModel=CHAT_MODELS[saved.chatModel]?saved.chatModel:DEFAULT_CHAT_MODEL;selectedImageModel=IMAGE_MODELS[saved.imageModel]?saved.imageModel:DEFAULT_IMAGE_MODEL}catch{selectedChatModel=DEFAULT_CHAT_MODEL;selectedImageModel=DEFAULT_IMAGE_MODEL}
+    const c=document.querySelector("#chat-model-select"),i=document.querySelector("#image-model-select");if(c)c.value=selectedChatModel;if(i)i.value=selectedImageModel;
+    const label=document.querySelector("#active-model-label");if(label)label.textContent=CHAT_MODELS[selectedChatModel].label;
+  }
+  function saveModelSettings(){
+    try{localStorage.setItem(settingsKey(),JSON.stringify({chatModel:selectedChatModel,imageModel:selectedImageModel}))}catch{}
+    const label=document.querySelector("#active-model-label");if(label)label.textContent=CHAT_MODELS[selectedChatModel].label;
+    const saved=document.querySelector("#settings-saved");if(saved)saved.textContent="Saved for "+(window.LupinAccount?.user?.username||"this browser")+" · applies to your next message.";
+  }
+  function showModelSettings(show){
+    const page=document.querySelector("#model-settings"),conversation=document.querySelector("#conversation"),composer=document.querySelector(".composer-wrap"),back=document.querySelector("#settings-back"),tab=document.querySelector("#model-tab");
+    if(!page||!conversation||!composer)return;page.hidden=!show;conversation.hidden=show;composer.hidden=show;back.hidden=!show;tab?.classList.toggle("active",show);
+    if(show){loadModelSettings();document.querySelector("#sidebar")?.classList.remove("open")}
+  }
+  document.querySelector("#model-tab")?.addEventListener("click",()=>showModelSettings(true));
+  document.querySelector("#settings-back")?.addEventListener("click",()=>showModelSettings(false));
+  document.querySelector("#chat-model-select")?.addEventListener("change",e=>{selectedChatModel=CHAT_MODELS[e.target.value]?e.target.value:DEFAULT_CHAT_MODEL;saveModelSettings()});
+  document.querySelector("#image-model-select")?.addEventListener("change",e=>{selectedImageModel=IMAGE_MODELS[e.target.value]?e.target.value:DEFAULT_IMAGE_MODEL;saveModelSettings()});
+  loadModelSettings();
+  window.addEventListener("lupin-account-changed",()=>{loadModelSettings();saveModelSettings()});
   const API_URL="https://lupin-ai.lujinsg.workers.dev/api/chat";
   const HISTORY_URL="https://lupin-ai.lujinsg.workers.dev/api/chats";
   const TOKENS_URL="https://lupin-ai.lujinsg.workers.dev/api/tokens";
@@ -266,7 +292,7 @@
     welcome.hidden=true;addMessage("user",storedText);history.push({role:"user",content:storedText});saveCurrentChat();input.value="";input.style.height="auto";pendingFiles=[];renderAttachments();
     busy=true;send.disabled=true;send.textContent="…";input.disabled=true;const thinking=addMessage("assistant","",true);
     try{
-      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
+      const response=await fetch(API_URL,{method:"POST",headers:tokenHeaders(),body:JSON.stringify({clientId,model:selectedChatModel,imageModel:selectedImageModel,messages:history.slice(-20),airlineToken:window.LupinAirline?.token||"",attachments:files.filter(f=>f.imageData).map(f=>({name:f.name,type:f.type,data:f.imageData}))})});
       const data=await response.json().catch(()=>({}));
       thinking.remove();if(!response.ok)throw new Error(data.error||"The request failed. Please try again.");
       if(requestScope!==currentChatScope()){notify("Your account changed while this reply was processing. It was not added to the new account's chat history.");return;}
