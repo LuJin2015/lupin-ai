@@ -539,7 +539,7 @@ export default {
             return json({error:{message:"Model not found. Available models: lupin-ai, qwen3.8-27b.",type:"invalid_request_error",param:"model",code:"model_not_found"}},404,origin);
           }
           if(body.stream===true){
-            const streamResult=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7,stream:true});
+            const streamResult=await env.AI.run(DEFAULT_MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7,stream:true});
             if(!streamResult || typeof streamResult.getReader!=="function")throw new Error("The model did not return a readable stream.");
             const reader=streamResult.getReader();
             const completionId="chatcmpl-"+crypto.randomUUID().replace(/-/g,""),created=Math.floor(Date.now()/1000);
@@ -610,7 +610,7 @@ export default {
             });
             return new Response(stream,{status:200,headers:streamHeaders});
           }
-          const result=await env.AI.run(MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7});
+          const result=await env.AI.run(DEFAULT_MODEL,{messages:[{role:"system",content:SYSTEM_PROMPT},...messages],max_completion_tokens:outputLimit,temperature:typeof body.temperature==="number"?Math.max(0,Math.min(2,body.temperature)):0.7});
           const reply=result?.response??result?.result?.response??result?.choices?.[0]?.message?.content;
           if(typeof reply!=="string"||!reply.trim())throw new Error("The model returned an empty response.");
           const completionTokens=Math.max(1,estimateTextTokens(reply)),promptTokens=inputEstimate,totalTokens=inputEstimate+completionTokens;
@@ -817,7 +817,13 @@ export default {
         return json({error:"Choose a supported Lupin AI chat model in Settings."},400,origin);
       }
       const model = images.length ? VISION_MODEL : CHAT_MODELS[requestedModel];
-      const result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
+      let result;
+      if (!images.length && requestedModel.endsWith("-lora")) {
+        const prompt = promptMessages.map(message => message.role.toUpperCase() + ": " + String(message.content ?? "")).join("\\n\\n");
+        result = await env.AI.run(model, { prompt, max_tokens: 1200, temperature: 0.7 });
+      } else {
+        result = await env.AI.run(model, { messages: promptMessages, max_completion_tokens: 1200, temperature: 0.7 });
+      }
       const reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content;
       if (typeof reply !== "string" || !reply.trim()) {
         if(ownerReservation>0){await refundLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;}
