@@ -274,13 +274,33 @@
     throw new Error("Unsupported file type. Use DOCX, XLSX/XLS, or PPTX (not legacy .doc or .ppt).");
   }
   async function prepareAttachment(file){
-    const ext=file.name.toLowerCase().split(".").pop();const image=file.type.startsWith("image/")||["png","jpg","jpeg","webp"].includes(ext);
-    if(image){if(!["image/png","image/jpeg","image/webp"].includes(file.type))throw new Error(file.name+": use PNG, JPEG, or WebP images.");if(file.size>4*1024*1024)throw new Error(file.name+": images must be 4 MB or smaller.");return{name:file.name,type:file.type,size:file.size,imageData:await readAsDataUrl(file),extractedText:""}}
+    const ext=file.name.toLowerCase().split(".").pop();
+    const imageExtensions=["png","jpg","jpeg","webp"];
+    const officeExtensions=["docx","xlsx","xls","pptx"];
+    if(!imageExtensions.includes(ext)&&!officeExtensions.includes(ext)){
+      throw new Error("Unsupported file: "+file.name+". Supported formats: PNG, JPG/JPEG, WebP, DOCX, XLSX, XLS and PPTX.");
+    }
+    if(imageExtensions.includes(ext)){
+      const expectedType=ext==="png"?"image/png":ext==="webp"?"image/webp":"image/jpeg";
+      if(file.type&&file.type!==expectedType)throw new Error(file.name+": the file extension and image format do not match. Use a valid PNG, JPEG or WebP image.");
+      if(file.size>4*1024*1024)throw new Error(file.name+": images must be 4 MB or smaller.");
+      return{name:file.name,type:expectedType,size:file.size,imageData:await readAsDataUrl(file),extractedText:""};
+    }
     if(file.size>10*1024*1024)throw new Error(file.name+": Office files must be 10 MB or smaller.");
-    const extractedText=await extractOfficeText(file);return{name:file.name,type:file.type||"application/octet-stream",size:file.size,imageData:"",extractedText}
+    const extractedText=await extractOfficeText(file);
+    return{name:file.name,type:file.type||"application/octet-stream",size:file.size,imageData:"",extractedText};
   }
   attachButton?.addEventListener("click",()=>fileInput.click());
-  fileInput?.addEventListener("change",async()=>{const selected=Array.from(fileInput.files||[]);fileInput.value="";if(pendingFiles.length+selected.length>5){notify("Attach up to 5 files per message.");return}for(const file of selected){try{const ready=await prepareAttachment(file);pendingFiles.push(ready)}catch(error){notify(error.message||"Could not attach file.")}}renderAttachments()});
+  fileInput?.addEventListener("change",async()=>{
+    const selected=Array.from(fileInput.files||[]);
+    fileInput.value="";
+    if(pendingFiles.length+selected.length>5){notify("Attach up to 5 files per message.");return;}
+    for(const file of selected){
+      try{const ready=await prepareAttachment(file);pendingFiles.push(ready);}
+      catch(error){notify(error.message||"Could not attach file.");}
+    }
+    renderAttachments();
+  });
   async function sendMessage(raw,files=[]){
     if(window.LupinAccount?.ready){try{await window.LupinAccount.ready}catch{}}
     if(currentChatScope()==="restoring"){notify("Your Lupin account is still being checked. Try sending again in a moment.");return}
