@@ -6,7 +6,7 @@
   let token = localStorage.getItem(KEY) || "", username = "";
   const setError = message => { $("airline-error").textContent = message || ""; };
   function render() {
-    openBtn.textContent = token ? "✈ Airline connected" : "✈ Connect airline";
+    openBtn.title = token ? "Lupin Airlines connected" : "Connect your Lupin Airlines account";
     $("airline-title").textContent = token ? "Lupin Airlines is connected." : "Connect your airline account.";
     $("airline-submit").textContent = token ? "Reconnect account" : "Connect account";
     $("airline-disconnect").hidden = !token;
