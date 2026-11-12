@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#11130f">
-<meta name="description" content="Lupin AI — a clear, capable AI assistant."><title>Lupin AI</title><link rel="stylesheet" href="./styles.css?v=1.8.1"><script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script><script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js" defer></script><script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script><script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+<meta name="description" content="Lupin AI — a clear, capable AI assistant."><title>Lupin AI</title><link rel="stylesheet" href="./styles.css?v=1.8.2"><script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script><script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js" defer></script><script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script><script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -18,7 +18,26 @@
 <section class="settings-card" aria-labelledby="chat-model-heading"><div class="settings-card-top"><span class="settings-symbol">✳</span><div><h2 id="chat-model-heading">Chat model</h2><p>Choose the model that writes your replies.</p></div></div><label for="chat-model-select">Text generation</label><select id="chat-model-select">
 <option value="gemma-4-26b-a4b-it">Gemma 4 · 26B A4B</option><option value="gemma-7b-it-lora">Gemma 7B · LoRA (Beta)</option><option value="gemma-2b-it-lora">Gemma 2B · LoRA (Beta)</option><option value="gpt-oss-120b">GPT-OSS · 120B</option><option value="gpt-oss-20b">GPT-OSS · 20B</option></select><p class="settings-help">Beta models are experimental. Cloudflare has announced that both LoRA models are scheduled to stop responding on November 20, 2026. Image attachments continue to use Lupin AI’s dedicated vision model.</p></section>
 <section class="settings-card" aria-labelledby="image-model-heading"><div class="settings-card-top"><span class="settings-symbol">▧</span><div><h2 id="image-model-heading">Image model</h2><p>Choose the model for image generation.</p></div></div><label for="image-model-select">Image generation</label><select id="image-model-select"><option value="flux-2-klein-9b">FLUX.2 Klein · 9B</option><option value="flux-2-klein-4b">FLUX.2 Klein · 4B</option></select><p class="settings-help">Your choice is saved. Image generation is not enabled in the current chat interface yet.</p></section>
-</div><div class="settings-saved" id="settings-saved" role="status">Selections save automatically.</div>
+</div>
+<section class="capabilities-section" aria-labelledby="capabilities-title">
+  <div class="capabilities-heading"><div><span class="eyebrow"><span></span> MODEL REFERENCE</span><h2 id="capabilities-title">Model capabilities.</h2><p>Compare supported input and output types, tool use and image workflows. “Unconfirmed” means the capability is not established for this deployment.</p></div></div>
+  <div class="capabilities-scroll" role="region" aria-label="Model capability comparison" tabindex="0">
+    <table class="capabilities-table">
+      <thead><tr><th scope="col">Model</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Function calling</th><th scope="col">Reasoning</th><th scope="col">Image understanding</th><th scope="col">Image editing</th><th scope="col">Multi-reference</th><th scope="col">Streaming</th></tr></thead>
+      <tbody>
+        <tr><th scope="row"><code>gemma-4-26b-a4b-it</code></th><td>Text, image</td><td>Text</td><td><span class="cap-yes">Supported</span></td><td><span class="cap-yes">Supported</span></td><td><span class="cap-yes">Yes</span></td><td>No</td><td>No</td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>gemma-7b-it-lora</code></th><td>Text</td><td>Text</td><td><span class="cap-unknown">Unconfirmed</span></td><td><span class="cap-unknown">Unconfirmed</span></td><td>No</td><td>No</td><td>No</td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>gemma-2b-it-lora</code></th><td>Text</td><td>Text</td><td><span class="cap-unknown">Unconfirmed</span></td><td><span class="cap-unknown">Unconfirmed</span></td><td>No</td><td>No</td><td>No</td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>gpt-oss-120b</code></th><td>Text</td><td>Text</td><td><span class="cap-yes">Supported</span></td><td><span class="cap-yes">Supported</span></td><td>No</td><td>No</td><td>No</td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>gpt-oss-20b</code></th><td>Text</td><td>Text</td><td><span class="cap-yes">Supported</span></td><td><span class="cap-yes">Supported</span></td><td>No</td><td>No</td><td>No</td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>flux-2-klein-9b</code></th><td>Text, image</td><td>Image</td><td>No</td><td>N/A</td><td>Not general-purpose</td><td><span class="cap-yes">Yes</span></td><td><span class="cap-yes">Yes</span></td><td>API-dependent</td></tr>
+        <tr><th scope="row"><code>flux-2-klein-4b</code></th><td>Text, image</td><td>Image</td><td>No</td><td>N/A</td><td>Not general-purpose</td><td><span class="cap-yes">Yes</span></td><td><span class="cap-unknown">Unconfirmed</span></td><td>API-dependent</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="capabilities-note"><strong>Notes:</strong> FLUX image input is for reference-based image editing, not general image question-answering. Streaming depends on the API and backend integration. Audio and video input are not listed for these models. Function-calling support also requires Lupin AI's backend to execute tool calls.</p>
+</section>
+<div class="settings-saved" id="settings-saved" role="status">Selections save automatically.</div>
 </section>
 <section class="conversation" id="conversation" aria-live="polite"><div class="welcome" id="welcome"><div class="eyebrow"><span></span> YOUR AI, YOUR CURIOSITY</div><h1>Big questions.<br><em>Clearer answers.</em></h1><p class="intro">A fresh place to think, learn, build and figure things out.</p>
 <div class="suggestions">
