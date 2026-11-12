@@ -87,3 +87,22 @@
 /* v1.8.0: API and airline actions live in the workspace rail */
 .tab-rail .rail-tab[aria-haspopup="dialog"]{flex-shrink:0}
 .tab-rail .rail-tab[aria-haspopup="dialog"] .rail-icon{font-size:17px;font-weight:750}
+
+
+/* v1.8.2: model capability reference */
+.capabilities-section{margin-top:38px;padding-top:27px;border-top:1px solid var(--line)}
+.capabilities-heading h2{font-size:22px;letter-spacing:-.035em;margin:13px 0 8px}
+.capabilities-heading p{max-width:720px;color:#a5ab9b;font-size:12px;line-height:1.7;margin:0}
+.capabilities-scroll{margin-top:18px;overflow-x:auto;border:1px solid var(--line);border-radius:13px;background:#151811}
+.capabilities-table{width:100%;min-width:1040px;border-collapse:collapse;text-align:left;font-size:11px}
+.capabilities-table th,.capabilities-table td{padding:12px 13px;border-bottom:1px solid #2b3026;vertical-align:middle;white-space:nowrap}
+.capabilities-table thead th{background:#20251a;color:#cbd4bc;font-size:10px;letter-spacing:.035em;font-weight:750}
+.capabilities-table tbody th{font-weight:650;color:#e5edda}
+.capabilities-table tbody tr:last-child th,.capabilities-table tbody tr:last-child td{border-bottom:0}
+.capabilities-table code{font-size:10px;color:#d6f58a}
+.cap-yes,.cap-unknown{display:inline-block;padding:4px 7px;border-radius:6px;font-size:10px;font-weight:700}
+.cap-yes{background:#26321c;color:#c8f169}
+.cap-unknown{background:#30291a;color:#e9c77c}
+.capabilities-note{margin:12px 0 0;color:#858d7b;font-size:10px;line-height:1.7}
+.capabilities-note strong{color:#cbd4bc}
+.capabilities-scroll:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
