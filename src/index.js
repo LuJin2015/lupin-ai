@@ -354,15 +354,59 @@ function parseTaggedToolCall(source) {
   if (endIndex < 0) return null;
   const tail = source.slice(endIndex + 1).trim();
   if (tail && tail !== "<tool_call|>") return null;
+
   const body = source.slice(openIndex + 1, endIndex);
   const args = {};
-  const promptMatch = body.match(/(?:^|[,\s])prompt\s*:\s*(?:“([\s\S]*?)”|"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')/);
-  if (promptMatch) args.prompt = promptMatch[1] ?? promptMatch[2] ?? promptMatch[3];
-  for (const key of ["width", "height"]) {
-    const match = body.match(new RegExp("(?:^|[,\\s])" + key + "\\s*:\\s*(\\d+)"));
-    if (match) args[key] = Number(match[1]);
+  let i = 0;
+  while (i < body.length) {
+    while (i < body.length && /[\s,]/.test(body[i])) i++;
+    if (i >= body.length) break;
+    const keyMatch = body.slice(i).match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:/);
+    if (!keyMatch) return null;
+    const key = keyMatch[1];
+    i += keyMatch[0].length;
+    while (i < body.length && /\s/.test(body[i])) i++;
+    if (i >= body.length) return null;
+
+    const opener = body[i];
+    if (opener === '"' || opener === "'" || opener === "“") {
+      const closer = opener === "“" ? "”" : opener;
+      const valueStart = ++i;
+      let value = "", escapedValue = false, closed = false;
+      while (i < body.length) {
+        const ch = body[i++];
+        if (opener !== "“" && escapedValue) { value += ch; escapedValue = false; continue; }
+        if (opener !== "“" && ch === "\\") { value += ch; escapedValue = true; continue; }
+        if (ch === closer) { closed = true; break; }
+        value += ch;
+      }
+      if (!closed) return null;
+      if (opener === '"') {
+        try { args[key] = JSON.parse('"' + value + '"'); }
+        catch { args[key] = value.replace(/\\"/g, '"').replace(/\\\\/g, "\\"); }
+      } else if (opener === "'") {
+        args[key] = value.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+      } else {
+        args[key] = value;
+      }
+    } else {
+      const valueStart = i;
+      while (i < body.length && body[i] !== ",") i++;
+      const raw = body.slice(valueStart, i).trim();
+      if (!raw) return null;
+      if (raw === "true") args[key] = true;
+      else if (raw === "false") args[key] = false;
+      else if (raw === "null") args[key] = null;
+      else if (/^-?\d+(?:\.\d+)?$/.test(raw)) args[key] = Number(raw);
+      else args[key] = raw;
+    }
+    while (i < body.length && /\s/.test(body[i])) i++;
+    if (i < body.length && body[i] !== ",") return null;
   }
-  if (typeof args.prompt !== "string" || !args.prompt.trim()) return null;
+
+  if (start[1] === "generate_image" && (typeof args.prompt !== "string" || !args.prompt.trim())) return null;
+  if (start[1] === "browse_web" && (typeof args.query !== "string" || !args.query.trim())) return null;
+  if (start[1] === "lupin_airlines" && (typeof args.action !== "string" || !args.action.trim())) return null;
   return { name: start[1], arguments: args };
 }
 function extractLupinToolCalls(result) {
