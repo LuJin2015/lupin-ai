@@ -334,7 +334,7 @@ function parseTaggedToolCall(source) {
   // Gemma-style tool protocol can leak as visible special-token text:
   // <|tool_call>call:generate_image{prompt: “...”}<tool_call|>
   // Parse only a complete, allow-listed envelope. Never eval model output.
-  const start = source.match(/^<\\|tool_call\\>\\s*call:([A-Za-z_][A-Za-z0-9_]*)\\s*\\{/);
+  const start = source.match(/^<\|tool_call>\s*call:([A-Za-z_][A-Za-z0-9_]*)\s*\{/);
   if (!start || !LUPIN_TOOL_NAMES.has(start[1])) return null;
   const openIndex = start[0].lastIndexOf("{");
   let depth = 0, quote = null, escaped = false, endIndex = -1;
@@ -343,7 +343,7 @@ function parseTaggedToolCall(source) {
     if (quote) {
       if (quote === "“" && ch === "”") quote = null;
       else if (quote !== "“" && escaped) escaped = false;
-      else if (quote !== "“" && ch === "\\\\") escaped = true;
+      else if (quote !== "“" && ch === "\\") escaped = true;
       else if (quote !== "“" && ch === quote) quote = null;
       continue;
     }
@@ -356,17 +356,15 @@ function parseTaggedToolCall(source) {
   if (tail && tail !== "<tool_call|>") return null;
   const body = source.slice(openIndex + 1, endIndex);
   const args = {};
-  // The leaked Gemma form uses unquoted keys and curly-quoted strings.
-  const promptMatch = body.match(/(?:^|[,\\s])prompt\\s*:\\s*(?:“([\\s\\S]*?)”|"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')/);
+  const promptMatch = body.match(/(?:^|[,\s])prompt\s*:\s*(?:“([\s\S]*?)”|"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')/);
   if (promptMatch) args.prompt = promptMatch[1] ?? promptMatch[2] ?? promptMatch[3];
   for (const key of ["width", "height"]) {
-    const match = body.match(new RegExp("(?:^|[,\\\\s])" + key + "\\\\s*:\\\\s*(\\\\d+)"));
+    const match = body.match(new RegExp("(?:^|[,\\s])" + key + "\\s*:\\s*(\\d+)"));
     if (match) args[key] = Number(match[1]);
   }
   if (typeof args.prompt !== "string" || !args.prompt.trim()) return null;
   return { name: start[1], arguments: args };
 }
-
 function extractLupinToolCalls(result) {
   const structured = [
     result?.tool_calls,
