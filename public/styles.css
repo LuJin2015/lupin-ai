@@ -106,3 +106,6 @@
 .capabilities-note{margin:12px 0 0;color:#858d7b;font-size:10px;line-height:1.7}
 .capabilities-note strong{color:#cbd4bc}
 .capabilities-scroll:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
+
+/* v1.8.0: model-directed image generation */
+.generated-image-wrap{margin:14px 0 4px;max-width:min(100%,680px)}.generated-image{display:block;width:100%;height:auto;max-height:720px;object-fit:contain;border:1px solid var(--line);border-radius:14px;background:#10120e}.generated-image-wrap figcaption{margin-top:7px;color:var(--muted);font-size:10px}
