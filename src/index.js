@@ -292,6 +292,78 @@ const LUPIN_TOOLS = [
   }
 ];
 
+const LUPIN_TOOL_NAMES = new Set(LUPIN_TOOLS.map(tool => tool.name));
+
+function parseToolArguments(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+  const source = value.trim().replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  try {
+    const parsed = JSON.parse(source);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    // Some model templates put an object inside action_input without escaping
+    // its quotes. Recover only a complete JSON object, never arbitrary prose.
+    const start = source.indexOf("{");
+    if (start < 0) return null;
+    let depth = 0, quoted = false, escaped = false;
+    for (let i = start; i < source.length; i++) {
+      const char = source[i];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') quoted = true;
+      else if (char === "{") depth++;
+      else if (char === "}" && --depth === 0) {
+        try {
+          const parsed = JSON.parse(source.slice(start, i + 1));
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+}
+
+function extractLupinToolCalls(result) {
+  const structured = [
+    result?.tool_calls,
+    result?.result?.tool_calls,
+    result?.choices?.[0]?.message?.tool_calls,
+    result?.choices?.[0]?.delta?.tool_calls
+  ].find(value => Array.isArray(value) && value.length);
+  if (structured) return structured;
+
+  // A few model/template combinations leak the selected action as response
+  // text instead of populating Workers AI's structured tool_calls field.
+  // Salvage only a standalone, allow-listed action envelope.
+  let responseText = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content ?? "";
+  if (typeof responseText !== "string") return [];
+  let source = responseText.trim().replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  if (source.startsWith("```")) {
+    source = source.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  }
+  let envelope = null;
+  try { envelope = JSON.parse(source); } catch {}
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    const actionMatch = source.match(/"action"\s*:\s*"(browse_web|lupin_airlines|generate_image)"/);
+    if (!actionMatch || !/"action_input"\s*:/.test(source)) return [];
+    const inputStart = source.search(/"action_input"\s*:/);
+    const input = parseToolArguments(source.slice(inputStart + source.slice(inputStart).indexOf(":") + 1));
+    if (!input) return [];
+    return [{ name: actionMatch[1], arguments: input }];
+  }
+  const name = String(envelope.action || "");
+  if (!LUPIN_TOOL_NAMES.has(name)) return [];
+  const args = parseToolArguments(envelope.action_input ?? envelope.arguments ?? {});
+  return args ? [{ name, arguments: args }] : [];
+}
+
 async function runLupinAirlineTool(airlineToken, args, latestUserText, messages) {
   if (!airlineToken) return { message: "Lupin Airlines is not connected. Ask the user to connect it using the Connecters tab before accessing airline data." };
   const base = "https://lupin-data-api.lujinsg.workers.dev/api/lupin-airlines";
@@ -935,16 +1007,26 @@ export default {
         let toolRounds = 0;
         while (toolRounds < 3) {
           result = await env.AI.run(model, { messages: toolMessages, tools: LUPIN_TOOLS, max_completion_tokens: 1200, temperature: 0.7 });
-          const calls = result?.tool_calls || result?.result?.tool_calls || result?.choices?.[0]?.message?.tool_calls || [];
-          if (!Array.isArray(calls) || !calls.length) {
+          const calls = extractLupinToolCalls(result);
+          if (!calls.length) {
             reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content ?? "";
             break;
           }
-          toolMessages.push({ role: "assistant", content: JSON.stringify(calls) });
-          for (const call of calls.slice(0, 3)) {
+          const normalizedCalls = calls.slice(0, 3).map(call => {
             const name = String(call?.name || call?.function?.name || "");
-            let args = call?.arguments ?? call?.function?.arguments ?? {};
-            if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = {}; } }
+            const args = parseToolArguments(call?.arguments ?? call?.function?.arguments ?? {});
+            return { name, arguments: args || {} };
+          }).filter(call => LUPIN_TOOL_NAMES.has(call.name));
+          if (!normalizedCalls.length) {
+            reply = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content ?? "";
+            break;
+          }
+          // Workers AI's native tool-call round trip expects the assistant's
+          // selected tool object (not a JSON array for a single call).
+          toolMessages.push({ role: "assistant", content: JSON.stringify(normalizedCalls.length === 1 ? normalizedCalls[0] : normalizedCalls) });
+          for (const call of normalizedCalls) {
+            const name = call.name;
+            const args = call.arguments;
             let output;
             try {
               if (name === "browse_web") {
@@ -953,9 +1035,11 @@ export default {
               } else if (name === "lupin_airlines") {
                 output = await runLupinAirlineTool(airlineToken, args, latestUserText, messages);
               } else if (name === "generate_image") {
-                if (generatedImage) output = { error: "Only one image can be generated per assistant response." };
+                const imagePrompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+                if (!imagePrompt) output = { error: "A non-empty model-written image prompt is required." };
+                else if (generatedImage) output = { error: "Only one image can be generated per assistant response." };
                 else {
-                  generatedImage = await generateLupinImage(env, args.prompt, String(body.imageModel || "flux-2-klein-9b"), args.width, args.height);
+                  generatedImage = await generateLupinImage(env, imagePrompt, String(body.imageModel || "flux-2-klein-9b"), args.width, args.height);
                   output = { generated: true, model: generatedImage.model, prompt: generatedImage.prompt };
                 }
               } else output = { error: "Unknown tool." };
