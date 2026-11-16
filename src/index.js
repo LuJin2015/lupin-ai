@@ -279,13 +279,14 @@ const LUPIN_TOOLS = [
   },
   {
     name: "generate_image",
-    description: "Generate an image with the user's selected FLUX.2 Klein model. You MUST write a rich, specific image-generation prompt yourself from the user's request. Do not merely copy or forward the user's wording. Include subject, composition, setting, lighting, visual style, colour palette, and important details. Use this tool when the user asks to create, draw, design, render, or generate an image.",
+    description: "Generate a new image or edit an image the user uploaded with the selected FLUX.2 Klein model. You MUST write a rich, specific prompt yourself from the user's request. Do not merely copy or forward the user's wording. Include subject, composition, setting, lighting, visual style, colour palette, and important details. For a new image, omit image_index. For an edit or transformation of an uploaded image, set image_index to the zero-based index of the exact uploaded image to use. Only set image_index when the user wants the uploaded image changed; do not pass an image for ordinary image analysis or for a new image.",
     parameters: {
       type: "object",
       properties: {
         prompt: { type: "string", description: "Your own detailed, polished image-generation prompt, written for FLUX.2 Klein." },
         width: { type: "integer", description: "Image width from 256 to 1920." },
-        height: { type: "integer", description: "Image height from 256 to 1920." }
+        height: { type: "integer", description: "Image height from 256 to 1920." },
+        image_index: { type: "integer", description: "Optional zero-based index of the uploaded image to edit. Omit for text-to-image generation." }
       },
       required: ["prompt"]
     }
@@ -501,12 +502,20 @@ async function runLupinAirlineTool(airlineToken, args, latestUserText, messages)
   return { error: "Unknown Lupin Airlines action." };
 }
 
-async function generateLupinImage(env, prompt, imageModel, width, height) {
+async function generateLupinImage(env, prompt, imageModel, width, height, sourceImage) {
   const model = IMAGE_MODEL_IDS[imageModel] || IMAGE_MODEL_IDS["flux-2-klein-9b"];
   const form = new FormData();
   form.append("prompt", String(prompt).slice(0, 4000));
   form.append("width", String(Math.max(256, Math.min(1920, Number(width) || 1024))));
   form.append("height", String(Math.max(256, Math.min(1920, Number(height) || 768))));
+  if (sourceImage) {
+    const prefix = "data:" + sourceImage.type + ";base64,";
+    if (!sourceImage.data.startsWith(prefix)) throw new Error("The selected uploaded image is invalid.");
+    const binary = atob(sourceImage.data.slice(prefix.length));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    form.append("input_image_0", new Blob([bytes], { type: sourceImage.type }), "uploaded-image");
+  }
   const serialized = new Response(form);
   const result = await env.AI.run(model, { multipart: { body: serialized.body, contentType: serialized.headers.get("content-type") } });
   if (!result?.image || typeof result.image !== "string") throw new Error("The image model did not return an image.");
@@ -958,7 +967,7 @@ export default {
     const airlineToken = String(body.airlineToken || "").slice(0, 200);
     const latestUserText = [...messages].reverse().find(m => m.role === "user")?.content || "";
     const requestedModel = String(body.model || "gemma-4-26b-a4b-it");
-    const supportsFunctionCalling = FUNCTION_CALLING_MODELS.has(requestedModel) && images.length === 0;
+    const supportsFunctionCalling = FUNCTION_CALLING_MODELS.has(requestedModel) && (images.length === 0 || requestedModel === "gemma-4-26b-a4b-it");
     const airlineRelated = /\b(lupin miles|miles balance|my miles|how many miles|my bookings|upcoming flights|my flights|list flights|available flights|book\s+(?:lp\s*\d+|flight)|confirm booking|cancel booking|confirm cancellation|cancel(?:lation)?(?:\s+booking)?\s+LUP-[A-Z0-9]+|confirm\s+cancel\s+LUP-[A-Z0-9]+)\b/i.test(latestUserText);
     if (airlineRelated && !supportsFunctionCalling) {
       if (!airlineToken) return json({ reply: "Connect your Lupin Airlines account first using **Connect airline** in the top bar. Your Lupin AI account and airline account are separate, so I need your airline sign-in to access your bookings and miles." }, 200, origin);
@@ -1083,7 +1092,7 @@ export default {
         if(ownerReservation>0){await refundLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation);ownerReservation=0;globalReservation=0;}
         return json({error:"Choose a supported Lupin AI chat model in Settings."},400,origin);
       }
-      const model = images.length ? VISION_MODEL : CHAT_MODELS[requestedModel];
+      const model = images.length && requestedModel !== "gemma-4-26b-a4b-it" ? VISION_MODEL : CHAT_MODELS[requestedModel];
       let result, generatedImage = null, reply = "";
       if (supportsFunctionCalling) {
         const toolMessages = promptMessages.slice();
@@ -1122,7 +1131,9 @@ export default {
                 if (!imagePrompt) output = { error: "A non-empty model-written image prompt is required." };
                 else if (generatedImage) output = { error: "Only one image can be generated per assistant response." };
                 else {
-                  generatedImage = await generateLupinImage(env, imagePrompt, String(body.imageModel || "flux-2-klein-9b"), args.width, args.height);
+                  const sourceImage = args.image_index === undefined ? null : (Number.isInteger(args.image_index) && args.image_index >= 0 && args.image_index < images.length ? images[args.image_index] : null);
+                  if (args.image_index !== undefined && !sourceImage) throw new Error("The selected image_index is invalid. Choose a zero-based index from the uploaded images, or omit it to create a new image.");
+                  generatedImage = await generateLupinImage(env, imagePrompt, String(body.imageModel || "flux-2-klein-9b"), args.width, args.height, sourceImage);
                   output = { generated: true, model: generatedImage.model, prompt: generatedImage.prompt };
                 }
               } else output = { error: "Unknown tool." };
