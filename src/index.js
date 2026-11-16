@@ -330,6 +330,43 @@ function parseToolArguments(value) {
   }
 }
 
+function parseTaggedToolCall(source) {
+  // Gemma-style tool protocol can leak as visible special-token text:
+  // <|tool_call>call:generate_image{prompt: “...”}<tool_call|>
+  // Parse only a complete, allow-listed envelope. Never eval model output.
+  const start = source.match(/^<\\|tool_call\\>\\s*call:([A-Za-z_][A-Za-z0-9_]*)\\s*\\{/);
+  if (!start || !LUPIN_TOOL_NAMES.has(start[1])) return null;
+  const openIndex = start[0].lastIndexOf("{");
+  let depth = 0, quote = null, escaped = false, endIndex = -1;
+  for (let i = openIndex; i < source.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (quote === "“" && ch === "”") quote = null;
+      else if (quote !== "“" && escaped) escaped = false;
+      else if (quote !== "“" && ch === "\\\\") escaped = true;
+      else if (quote !== "“" && ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "“") { quote = ch; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) { endIndex = i; break; }
+  }
+  if (endIndex < 0) return null;
+  const tail = source.slice(endIndex + 1).trim();
+  if (tail && tail !== "<tool_call|>") return null;
+  const body = source.slice(openIndex + 1, endIndex);
+  const args = {};
+  // The leaked Gemma form uses unquoted keys and curly-quoted strings.
+  const promptMatch = body.match(/(?:^|[,\\s])prompt\\s*:\\s*(?:“([\\s\\S]*?)”|"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')/);
+  if (promptMatch) args.prompt = promptMatch[1] ?? promptMatch[2] ?? promptMatch[3];
+  for (const key of ["width", "height"]) {
+    const match = body.match(new RegExp("(?:^|[,\\\\s])" + key + "\\\\s*:\\\\s*(\\\\d+)"));
+    if (match) args[key] = Number(match[1]);
+  }
+  if (typeof args.prompt !== "string" || !args.prompt.trim()) return null;
+  return { name: start[1], arguments: args };
+}
+
 function extractLupinToolCalls(result) {
   const structured = [
     result?.tool_calls,
@@ -339,21 +376,25 @@ function extractLupinToolCalls(result) {
   ].find(value => Array.isArray(value) && value.length);
   if (structured) return structured;
 
-  // A few model/template combinations leak the selected action as response
-  // text instead of populating Workers AI's structured tool_calls field.
-  // Salvage only a standalone, allow-listed action envelope.
-  let responseText = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content ?? "";
+  // Some model/template combinations leak tool calls into ordinary response
+  // text rather than Workers AI's structured tool_calls field.
+  const responseText = result?.response ?? result?.result?.response ?? result?.choices?.[0]?.message?.content ?? "";
   if (typeof responseText !== "string") return [];
-  let source = responseText.trim().replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  let source = responseText.trim();
   if (source.startsWith("```")) {
-    source = source.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    source = source.replace(/^\`\`\`(?:json)?\\s*/i, "").replace(/\\s*\`\`\`$/, "").trim();
   }
+
+  const tagged = parseTaggedToolCall(source);
+  if (tagged) return [tagged];
+
+  source = source.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
   let envelope = null;
   try { envelope = JSON.parse(source); } catch {}
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-    const actionMatch = source.match(/"action"\s*:\s*"(browse_web|lupin_airlines|generate_image)"/);
-    if (!actionMatch || !/"action_input"\s*:/.test(source)) return [];
-    const inputStart = source.search(/"action_input"\s*:/);
+    const actionMatch = source.match(/"action"\\s*:\\s*"(browse_web|lupin_airlines|generate_image)"/);
+    if (!actionMatch || !/"action_input"\\s*:/.test(source)) return [];
+    const inputStart = source.search(/"action_input"\\s*:/);
     const input = parseToolArguments(source.slice(inputStart + source.slice(inputStart).indexOf(":") + 1));
     if (!input) return [];
     return [{ name: actionMatch[1], arguments: input }];
