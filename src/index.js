@@ -885,7 +885,7 @@ export default {
           const latestText=[...messages].reverse().find(m=>m.role==="user")?.content||"";
           const wantsWeb=/\b(browse|search|find|look up|visit|open|read|summari[sz]e|scrape|crawl|look at|check this (?:site|page|url)|research this page)\b/i.test(latestText);
           tokenEstimate=estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n"))+images.length*1024+(wantsWeb?WEB_CONTEXT_RESERVE_TOKENS:0);
-          const expectedOutput=1200;
+          const expectedOutput=supportsFunctionCalling?2400:1200;
           if(tokenLimitStatus.globalUsed+tokenLimitStatus.globalReserved+tokenEstimate+expectedOutput>tokenLimitStatus.globalLimit){
             return json({error:"Lupin AI has reached its shared daily safety cap. This protects the Cloudflare AI budget for everyone; try again after the daily reset.",lupinTokens:tokenLimitStatus},429,origin);
           }
@@ -910,8 +910,10 @@ export default {
     try {
       const lastUser = [...messages].reverse().find(m => m.role === "user")?.content || "";
       let webContext = "";
-      try { webContext = await getWebContext(env, lastUser); }
-      catch (error) { webContext = "WEB BROWSING ERROR: " + String(error.message || error); }
+      if (!supportsFunctionCalling) {
+        try { webContext = await getWebContext(env, lastUser); }
+        catch (error) { webContext = "WEB BROWSING ERROR: " + String(error.message || error); }
+      }
       const promptMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
       if (images.length) {
         const target = [...promptMessages].reverse().find(m => m.role === "user");
@@ -981,7 +983,7 @@ export default {
       }
       let lupinTokens=null;
       if(tokenOwner){
-        const charged=Math.max(1,estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n")+"\n"+webContext+"\n"+reply)+images.length*1024);
+        const charged=Math.max(1,estimateTextTokens(SYSTEM_PROMPT+"\n"+messages.map(m=>m.content).join("\n")+"\n"+webContext+"\n"+reply+"\n"+(generatedImage?.prompt||""))+images.length*1024+(generatedImage?1024:0));
         let creditDebit=0;
         if(ownerReservation>0){
           await settleLupinUsagePair(env,tokenOwner,tokenDay,ownerReservation,charged,tokenLimitStatus.dailyLimit);
