@@ -325,7 +325,8 @@ async function runLupinAirlineTool(airlineToken, args, latestUserText, messages)
     if (!flight) return { error: "Flight " + flightCode + " was not found." };
     const date = /^20\d{2}-\d{2}-\d{2}$/.test(String(args.date || "")) ? args.date : new Date().toISOString().slice(0, 10);
     const previousAssistant = [...messages].reverse().find(item => item.role === "assistant")?.content || "";
-    const explicitlyConfirmed = /^\s*(?:confirm\b|yes\b|i confirm\b)/i.test(latestUserText) && (/\b" + flightCode.replace(" ", "\\s*") + "\b/i.test(latestUserText) || /^\s*(?:yes|i confirm)\s*[.!]?\s*$/i.test(latestUserText) && /confirm booking/i.test(previousAssistant));
+    const flightCodePattern = new RegExp("\\b" + flightCode.replace(" ", "\\s*") + "\\b", "i");
+    const explicitlyConfirmed = /^\s*(?:confirm\b|yes\b|i confirm\b)/i.test(latestUserText) && (flightCodePattern.test(latestUserText) || /^\s*(?:yes|i confirm)\s*[.!]?\s*$/i.test(latestUserText) && /confirm booking/i.test(previousAssistant));
     if (!args.confirm || !explicitlyConfirmed) return { confirmation_required: true, flight: { flight: flight.flight, destination: flight.destination, departure: flight.departure, gate: flight.gate, price: flight.price, date }, instruction: "Show these details and ask the user to reply 'confirm booking " + flight.flight + "' before booking. Do not call the booking endpoint yet." };
     const result = await request("/bookings", "POST", { flight: flight.flight, date, passengers: "1 passenger" });
     const me = await request("/me");
@@ -944,7 +945,7 @@ export default {
             let output;
             try {
               if (name === "browse_web") {
-                const context = await getWebContext(env, String(args.query || ""));
+                const context = await getWebContext(env, "browse " + String(args.query || ""));
                 output = { sources: context || "No public webpage content could be retrieved." };
               } else if (name === "lupin_airlines") {
                 output = await runLupinAirlineTool(airlineToken, args, latestUserText, messages);
